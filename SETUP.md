@@ -1,19 +1,23 @@
 # Install Noutify
 
-Follow this state machine from the target project's root. Do not ask for paths,
-read `.noutify.local.json`, or repeat a topic in chat, logs, or summaries.
+Follow this state machine from the target project's root. Do not ask for paths
+or read `.noutify.local.json`.
 
 ## Language
 
-Detect the user's interaction language. Use `es` for Spanish and `en` for
-English; speak to the user in that language. Commands and JSON stay unchanged.
+Use the latest clear user request or established conversation language. Otherwise
+inspect `[System.Globalization.CultureInfo]::CurrentUICulture`. Map Spanish to
+`es` and English to `en`; otherwise use English notifications. For an unsupported
+interaction language, use English notifications but may explain in the interaction
+language. Commands and JSON stay unchanged.
 
 ## Prepare
 
 Run one command: `node Noutify/scripts/install.mjs --language <es|en>`. Read
 only its final JSON record. For `created`, Show the new topic once in the
-interaction language, then never repeat it. For `existing` or any failure, use
-the conditional guide below.
+interaction language. Never repeat the topic after that display in chat, logs,
+summaries, commits, docs, issues, diagnostics, artifacts, or generated files.
+For `existing` or any failure, use the conditional guide below.
 
 ## Subscribe
 

@@ -59,9 +59,12 @@ New topics use the phone-friendly form `Noutify-[12 easy characters]`.
 
 ## How language selection works
 
-The setup contract is written once in English, but Claude conducts the
-installation in the detected interaction language. Spanish and English notifications
-use the language selected during setup. Later, use
+The setup contract is written once in English. Claude uses the latest clear user
+request or established conversation language; otherwise it checks the OS UI
+locale, then uses English notifications. Spanish maps to `es` and English to
+`en`. Spanish and English notifications use the selected setting. For an
+unsupported interaction language, notifications use English while Claude may
+explain in the interaction language. Later, use
 `/noutify language español` or `/noutify language english` in the project to
 change notification language.
 

@@ -70,8 +70,9 @@ is a project-local agent-guided installation:
    Install Noutify following Noutify/SETUP.md.
    ```
 
-3. Claude detects Spanish or English and runs the compact installer without
-   asking the user for paths.
+3. Claude uses the latest clear user request or established conversation language,
+   then the OS UI locale, then English notifications, and runs the compact
+   installer without asking the user for paths.
 4. The installer validates, installs dependencies, tests, type-checks, builds,
    and configures the hook without replacing existing settings.
 5. Claude reads the final structured record and shows a newly created topic once.
@@ -79,12 +80,12 @@ is a project-local agent-guided installation:
 7. The user explicitly confirms phone receipt.
 8. Claude runs diagnostics and describes any remaining real-device acceptance.
 
-The English setup contract is language-neutral infrastructure. Claude speaks in
-the detected interaction language and uses `es` for Spanish or `en` for English.
-Spanish and English notifications follow that choice; `/noutify language` can
-change it later. New topics have the form `Noutify-[12 easy characters]`.
-Commands, paths, filenames, configuration keys, and literal output remain
-unchanged.
+The English setup contract is language-neutral infrastructure. Spanish maps to
+`es` and English to `en`; unsupported interaction languages use English
+notifications while Claude may explain in the interaction language. Spanish and
+English notifications follow that choice; `/noutify language` can change it
+later. New topics have the form `Noutify-[12 easy characters]`. Commands, paths,
+filenames, configuration keys, and literal output remain unchanged.
 
 The project-local `Noutify/` directory remains in place because Phase 0 installs
 an absolute path to its compiled runtime. Package-based distribution will remove
@@ -257,7 +258,9 @@ other providers remain outside the current phase.
 `SETUP.md` is an operational interface for Claude, not background prose. It must:
 
 - keep the successful state machine within 350 words and 2,500 characters;
-- select `es` for Spanish interaction and `en` for English interaction;
+- select the conversation language, then OS UI locale, then English notifications;
+- map Spanish to `es` and English to `en`, while unsupported interaction
+  languages receive English notifications and may retain their explanation language;
 - run `node Noutify/scripts/install.mjs --language <es|en>` without manual paths;
 - parse its final structured `created` or `existing` record;
 - show a newly created topic exactly once, but never repeat it;

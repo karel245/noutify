@@ -8,8 +8,8 @@ successful record. Keep private values out of chat, logs, and generated files.
 Run setup from the target project's root, with `Noutify/` directly inside it.
 The validated path needs Windows, Node.js 24 or newer, npm, Claude Code
 project-local hooks, and an ntfy-compatible phone app. The installer verifies
-the Noutify source and runs dependency installation, tests, type checking, and
-the build before it changes the target.
+the Noutify source and runs `npm ci`, `npm test`, `npm run typecheck`, and
+`npm run build` before it changes the target.
 
 ## Setup recovery
 
