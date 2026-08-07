@@ -34,6 +34,7 @@ describe("project configuration", () => {
       projectName: "Demo",
       server: "https://ntfy.example",
       topic: "private_topic_1234567890",
+      language: "es",
     });
 
     await writeProjectConfig(root, bundle);
@@ -57,7 +58,38 @@ describe("project configuration", () => {
     expect(JSON.parse(privateText)).toEqual({
       server: "https://ntfy.example",
       topic: "private_topic_1234567890",
+      language: "es",
       setupCompleted: false,
+    });
+  });
+
+  it("uses a friendly topic when none is supplied", () => {
+    const bundle = createInitialConfig({ projectName: "Demo" });
+
+    expect(bundle.private.topic).toMatch(
+      /^Noutify-[23456789abcdefghjkmnpqrstuvwxyz]{12}$/,
+    );
+  });
+
+  it("reads legacy private configs without language as English", async () => {
+    const root = await temporaryProject();
+    const bundle = createInitialConfig({
+      projectName: "Demo",
+      topic: "private_topic_1234567890",
+    });
+    await writeProjectConfig(root, bundle);
+    await writeFile(
+      join(root, ".noutify.local.json"),
+      `${JSON.stringify({
+        server: "https://ntfy.sh",
+        topic: "private_topic_1234567890",
+        setupCompleted: false,
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(readProjectConfig(root)).resolves.toMatchObject({
+      private: { language: "en" },
     });
   });
 

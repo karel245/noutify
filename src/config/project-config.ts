@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
@@ -7,6 +7,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+
+import {
+  validateStoredLanguage,
+  type NotificationLanguage,
+} from "./language.js";
+import { generateFriendlyTopic } from "./topic.js";
 
 export const PUBLIC_CONFIG_FILE = "noutify.config.json";
 export const PRIVATE_CONFIG_FILE = ".noutify.local.json";
@@ -21,6 +27,7 @@ export interface PublicProjectConfig {
 export interface PrivateProjectConfig {
   server: string;
   topic: string;
+  language: NotificationLanguage;
   setupCompleted: boolean;
 }
 
@@ -33,6 +40,7 @@ export interface InitialConfigInput {
   projectName: string;
   server?: string;
   topic?: string;
+  language?: NotificationLanguage;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,7 +128,7 @@ export function validateProjectConfig(
   }
   assertOnlyKeys(
     privateValue,
-    ["server", "topic", "setupCompleted"],
+    ["server", "topic", "language", "setupCompleted"],
     "private config",
   );
   if (typeof privateValue.setupCompleted !== "boolean") {
@@ -137,6 +145,7 @@ export function validateProjectConfig(
     private: {
       server: validateServer(privateValue.server),
       topic: validateTopic(privateValue.topic),
+      language: validateStoredLanguage(privateValue.language),
       setupCompleted: privateValue.setupCompleted,
     },
   };
@@ -145,7 +154,7 @@ export function validateProjectConfig(
 export function createInitialConfig(
   input: InitialConfigInput,
 ): ProjectConfigBundle {
-  const topic = input.topic ?? randomBytes(18).toString("base64url");
+  const topic = input.topic ?? generateFriendlyTopic();
   return validateProjectConfig(
     {
       version: 1,
@@ -156,6 +165,7 @@ export function createInitialConfig(
     {
       server: input.server ?? "https://ntfy.sh",
       topic,
+      language: input.language ?? "en",
       setupCompleted: false,
     },
   );
