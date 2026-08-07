@@ -11,6 +11,32 @@ function defaultRoot() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
+export function runProductionCommand(command, argumentsList, options, runtime = {}) {
+  const spawn = runtime.spawn ?? spawnSync;
+  const spawnOptions = {
+    ...options,
+    encoding: "utf8",
+    windowsHide: true,
+  };
+  const platform = runtime.platform ?? process.platform;
+  if (platform === "win32" && command.toLowerCase().endsWith(".cmd")) {
+    const tokens = [command, ...argumentsList];
+    if (tokens.some((token) => !/^[A-Za-z0-9._-]+$/.test(token))) {
+      return {
+        status: null,
+        stdout: "",
+        stderr: "unsafe command token rejected\n",
+      };
+    }
+    return spawn(
+      runtime.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", tokens.join(" ")],
+      spawnOptions,
+    );
+  }
+  return spawn(command, argumentsList, spawnOptions);
+}
+
 function defaultDependencies() {
   return {
     platform: process.platform,
@@ -23,8 +49,7 @@ function defaultDependencies() {
         return false;
       }
     },
-    run: (command, argumentsList, options) =>
-      spawnSync(command, argumentsList, { ...options, encoding: "utf8" }),
+    run: runProductionCommand,
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text),
   };

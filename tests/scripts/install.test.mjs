@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { parseArguments, runInstall } from "../../scripts/install.mjs";
+import {
+  parseArguments,
+  runInstall,
+  runProductionCommand,
+} from "../../scripts/install.mjs";
 
 const noutifyRoot = join("workspace", "TargetProject", "Noutify");
 const targetRoot = dirname(noutifyRoot);
@@ -52,6 +56,88 @@ function createDependencies(overrides = {}) {
     },
   };
 }
+
+describe("production process runner", () => {
+  const windowsIt = process.platform === "win32" ? it : it.skip;
+
+  windowsIt("runs npm.cmd through the real Windows production runner", () => {
+    const result = runProductionCommand("npm.cmd", ["--version"], { cwd: process.cwd() });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("wraps safe cmd tokens with the configured command processor", () => {
+    const calls = [];
+    const result = runProductionCommand(
+      "npm.cmd",
+      ["run", "typecheck"],
+      { cwd: noutifyRoot },
+      {
+        platform: "win32",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        spawn: (command, argumentsList, options) => {
+          calls.push({ command, argumentsList, options });
+          return { status: 0, stdout: "ok\n", stderr: "" };
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(calls).toEqual([
+      {
+        command: "C:\\Windows\\System32\\cmd.exe",
+        argumentsList: ["/d", "/s", "/c", "npm.cmd run typecheck"],
+        options: { cwd: noutifyRoot, encoding: "utf8", windowsHide: true },
+      },
+    ]);
+  });
+
+  it("rejects shell-active cmd tokens without spawning", () => {
+    let spawned = false;
+
+    const result = runProductionCommand(
+      "npm.cmd",
+      ["run", "test&whoami"],
+      { cwd: noutifyRoot },
+      {
+        platform: "win32",
+        comSpec: "cmd.exe",
+        spawn: () => {
+          spawned = true;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+
+    expect(spawned).toBe(false);
+    expect(result.status).toBeNull();
+    expect(result.stderr).toContain("unsafe command token");
+  });
+
+  it("keeps node setup arguments out of cmd parsing", () => {
+    const calls = [];
+    const argumentsList = [cliPath, "setup", "--project", "C:\\Target & Notes"];
+
+    runProductionCommand("node", argumentsList, { cwd: noutifyRoot }, {
+      platform: "win32",
+      comSpec: "cmd.exe",
+      spawn: (command, receivedArguments, options) => {
+        calls.push({ command, receivedArguments, options });
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        command: "node",
+        receivedArguments: argumentsList,
+        options: { cwd: noutifyRoot, encoding: "utf8", windowsHide: true },
+      },
+    ]);
+  });
+});
 
 describe("compact installer", () => {
   it("runs Spanish preparation stages before final setup without child success output", async () => {
