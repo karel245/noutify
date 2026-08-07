@@ -63,9 +63,9 @@ function sourceIsValid(root, isFile) {
   );
 }
 
-function isSetupRecord(value) {
+function isSetupRecord(value, requestedLanguage) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  if (!supportedLanguages.has(value.language) || !isHttpServer(value.server)) return false;
+  if (value.language !== requestedLanguage || !isHttpServer(value.server)) return false;
   if (value.status === "existing") return !Object.hasOwn(value, "topic");
   return value.status === "created" && typeof value.topic === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(value.topic);
 }
@@ -153,7 +153,7 @@ export async function runInstall(argv, suppliedDependencies = {}) {
     if (stage === "setup") {
       const finalLine = result.stdout.trim().split(/\r?\n/).at(-1);
       try {
-        if (!isSetupRecord(JSON.parse(finalLine))) throw new Error("invalid setup record");
+        if (!isSetupRecord(JSON.parse(finalLine), parsed.language)) throw new Error("invalid setup record");
       } catch {
         return writeFailure(dependencies, "setup", 1, result.diagnostics);
       }

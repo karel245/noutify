@@ -22,7 +22,12 @@ function successfulRunner(commands) {
       status: 0,
       stdout:
         command === "node"
-          ? "{" + '"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"' + "}\n"
+          ? JSON.stringify({
+              status: "created",
+              language: argumentsList[argumentsList.indexOf("--language") + 1],
+              server: "https://ntfy.sh",
+              topic: "Noutify-safe-topic",
+            }) + "\n"
           : "verbose child output\n",
       stderr: "",
     };
@@ -202,6 +207,28 @@ describe("compact installer", () => {
     expect(exitCode).toBe(1);
     expect(fixture.output.stdout).not.toContain("PASS setup\n");
     expect(fixture.output.stderr.join("")).toContain("Noutify-safe-topic");
+  });
+
+  it("rejects a setup record whose language differs from the requested language", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout:
+            command === "node"
+              ? '{"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n'
+              : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(fixture.output.stdout).not.toContain("PASS setup\n");
+    expect(fixture.output.stderr.join("")).toContain('"language":"es"');
   });
 
   it("uses an advanced project override only for the final setup stage", async () => {
