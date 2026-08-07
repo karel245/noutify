@@ -286,6 +286,121 @@ describe("runCli", () => {
     expect(output.stderr).toEqual([]);
   });
 
+  it("updates a project's notification language", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "Noutify-54h7ja8k9p2m",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    const output = memoryIo();
+
+    expect(
+      await runCli(["language", "espa\u00f1ol", "--project", root], output.io, dependencies),
+    ).toBe(0);
+    expect((await readProjectConfig(root)).private.language).toBe("es");
+    expect(output.stdout).toEqual(["Idioma de notificaciones actualizado a espa\u00f1ol."]);
+  });
+
+  it("rejects an unsupported language without changing or revealing the configuration", async () => {
+    const root = await temporaryProject();
+    const topic = "Noutify-54h7ja8k9p2m";
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await runCli(
+      ["setup", "--project", root, "--topic", topic],
+      memoryIo().io,
+      dependencies,
+    );
+    const before = await readProjectConfig(root);
+    const output = memoryIo();
+
+    expect(
+      await runCli(["language", "fran\u00e7ais", "--project", root], output.io, dependencies),
+    ).toBe(1);
+    expect(await readProjectConfig(root)).toEqual(before);
+    expect(output.stdout).toEqual([]);
+    expect([...output.stdout, ...output.stderr].join("\n")).not.toContain(topic);
+  });
+
+  it("creates a Spanish setup and emits its machine-readable record", async () => {
+    const root = await temporaryProject();
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "Noutify-54h7ja8k9p2m",
+          "--language",
+          "es",
+          "--format",
+          "json",
+        ],
+        output.io,
+        { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
+      ),
+    ).toBe(0);
+    expect(output.stdout).toEqual([
+      JSON.stringify({
+        status: "created",
+        language: "es",
+        server: "https://ntfy.sh",
+        topic: "Noutify-54h7ja8k9p2m",
+      }),
+    ]);
+  });
+
+  it("reports the stored language for an existing JSON setup without changing it", async () => {
+    const root = await temporaryProject();
+    const dependencies = { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "Noutify-54h7ja8k9p2m",
+        "--language",
+        "es",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        ["setup", "--project", root, "--language", "en", "--format", "json"],
+        output.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(output.stdout).toEqual([
+      JSON.stringify({
+        status: "existing",
+        language: "es",
+        server: "https://ntfy.sh",
+      }),
+    ]);
+    expect((await readProjectConfig(root)).private.language).toBe("es");
+  });
+
   it.each([
     ["missing subcommand", ["hook"]],
     ["unknown subcommand", ["hook", "unknown"]],

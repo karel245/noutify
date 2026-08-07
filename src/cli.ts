@@ -4,11 +4,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
 import { readProjectConfig } from "./config/project-config.js";
+import { normalizeNotificationLanguage } from "./config/language.js";
 import { handleClaudeStop } from "./agents/claude-code/stop.js";
 import type { Notification } from "./core/types.js";
 import {
   confirmProject,
   doctorProject,
+  setProjectLanguage,
   setupProject,
   testProject,
   uninstallProject,
@@ -30,9 +32,10 @@ export interface CliDependencies {
 
 const HELP = `Noutify Phase 0
 
-Commands: setup | test | confirm | doctor | uninstall
+Commands: setup | test | confirm | doctor | uninstall | language
 
-  noutify setup [--project PATH] [--server URL] [--topic TOPIC]
+  noutify setup [--project PATH] [--server URL] [--topic TOPIC] [--language LANGUAGE] [--format json]
+  noutify language <language> [--project PATH]
   noutify test [--project PATH]
   noutify confirm [--project PATH]
   noutify doctor [--project PATH]
@@ -56,39 +59,46 @@ const defaultIo: CliIo = {
 interface ParsedArguments {
   command: string;
   subcommand?: string;
+  operands: string[];
   options: Map<string, string>;
 }
 
 function parseArguments(argv: string[]): ParsedArguments {
-  const [command = "--help", possibleSubcommand, ...rest] = argv;
+  const [command = "--help", ...tokens] = argv;
   let subcommand: string | undefined;
-  let optionTokens: string[];
+  let argumentTokens = tokens;
 
-  if (command === "hook" && possibleSubcommand && !possibleSubcommand.startsWith("--")) {
-    subcommand = possibleSubcommand;
-    optionTokens = rest;
-  } else {
-    optionTokens = possibleSubcommand === undefined ? rest : [possibleSubcommand, ...rest];
+  if (command === "hook" && tokens[0] && !tokens[0].startsWith("--")) {
+    subcommand = tokens[0];
+    argumentTokens = tokens.slice(1);
   }
 
   const options = new Map<string, string>();
-  for (let index = 0; index < optionTokens.length; index += 2) {
-    const key = optionTokens[index];
-    const value = optionTokens[index + 1];
-    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`invalid option near ${key ?? "end of command"}`);
+  const operands: string[] = [];
+  for (let index = 0; index < argumentTokens.length; index += 1) {
+    const token = argumentTokens[index];
+    if (token === undefined) break;
+    if (!token.startsWith("--")) {
+      operands.push(token);
+      continue;
     }
-    options.set(key.slice(2), value);
+    const value = argumentTokens[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`invalid option near ${token}`);
+    }
+    options.set(token.slice(2), value);
+    index += 1;
   }
 
-  const parsed: ParsedArguments = { command, options };
+  const parsed: ParsedArguments = { command, operands, options };
   if (subcommand !== undefined) parsed.subcommand = subcommand;
   return parsed;
 }
 
 function validateOptions(parsed: ParsedArguments): void {
   const allowedByCommand: Record<string, readonly string[]> = {
-    setup: ["project", "server", "topic"],
+    setup: ["project", "server", "topic", "language", "format"],
+    language: ["project"],
     test: ["project"],
     confirm: ["project"],
     doctor: ["project"],
@@ -104,6 +114,16 @@ function validateOptions(parsed: ParsedArguments): void {
   );
   if (unexpected !== undefined) {
     throw new Error(`unknown option --${unexpected} for ${parsed.command}`);
+  }
+  if (parsed.command === "setup" && parsed.options.get("format") !== undefined && parsed.options.get("format") !== "json") {
+    throw new Error("setup format must be json");
+  }
+  if (parsed.command === "language") {
+    if (parsed.operands.length !== 1) {
+      throw new Error("language requires exactly one language");
+    }
+  } else if (parsed.operands.length > 0) {
+    throw new Error(`unexpected operand ${parsed.operands[0]} for ${parsed.command}`);
   }
 }
 
@@ -174,15 +194,47 @@ export async function runCli(
         };
         const server = parsed.options.get("server");
         const topic = parsed.options.get("topic");
+        const language = parsed.options.get("language");
         if (server !== undefined) input.server = server;
         if (topic !== undefined) input.topic = topic;
+        if (language !== undefined) input.language = normalizeNotificationLanguage(language);
         const result = await setupProject(input);
+        if (parsed.options.get("format") === "json") {
+          io.writeStdout(JSON.stringify(
+            result.created
+              ? {
+                  status: "created",
+                  language: result.language,
+                  server: result.server,
+                  topic: result.topic,
+                }
+              : {
+                  status: "existing",
+                  language: result.language,
+                  server: result.server,
+                },
+          ));
+        } else {
+          io.writeStdout(
+            result.created
+              ? `Noutify installed. Subscribe your phone to topic: ${result.topic}`
+              : "Noutify is already configured; the Stop hook is ready.",
+          );
+          io.writeStdout("Run `noutify test` after subscribing your phone.");
+        }
+        return 0;
+      }
+      case "language": {
+        const value = parsed.operands[0];
+        if (value === undefined) {
+          throw new Error("language requires exactly one language");
+        }
+        const language = await setProjectLanguage(projectRoot, value);
         io.writeStdout(
-          result.created
-            ? `Noutify installed. Subscribe your phone to topic: ${result.topic}`
-            : "Noutify is already configured; the Stop hook is ready.",
+          language === "es"
+            ? "Idioma de notificaciones actualizado a español."
+            : "Notification language updated to English.",
         );
-        io.writeStdout("Run `noutify test` after subscribing your phone.");
         return 0;
       }
       case "test": {

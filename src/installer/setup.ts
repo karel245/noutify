@@ -9,6 +9,10 @@ import {
   readProjectConfig,
   writeProjectConfig,
 } from "../config/project-config.js";
+import {
+  normalizeNotificationLanguage,
+  type NotificationLanguage,
+} from "../config/language.js";
 import { notificationCopy } from "../core/notification-catalog.js";
 import type { Notification } from "../core/types.js";
 import {
@@ -32,12 +36,15 @@ export interface SetupProjectInput extends RuntimePaths {
   projectName?: string;
   server?: string;
   topic?: string;
+  language?: NotificationLanguage;
 }
 
 export interface SetupProjectResult {
   created: boolean;
   hookChanged: boolean;
   topic: string;
+  language: NotificationLanguage;
+  server: string;
   hookCommand: string;
 }
 
@@ -106,11 +113,13 @@ export async function setupProject(
       projectName: string;
       server?: string;
       topic?: string;
+      language?: NotificationLanguage;
     } = {
       projectName: input.projectName?.trim() || basename(projectRoot),
     };
     if (input.server !== undefined) initialInput.server = input.server;
     if (input.topic !== undefined) initialInput.topic = input.topic;
+    if (input.language !== undefined) initialInput.language = input.language;
     bundle = createInitialConfig(initialInput);
     await writeProjectConfig(projectRoot, bundle);
     created = true;
@@ -122,8 +131,22 @@ export async function setupProject(
     created,
     hookChanged: hook.changed,
     topic: bundle.private.topic,
+    language: bundle.private.language,
+    server: bundle.private.server,
     hookCommand,
   };
+}
+
+export async function setProjectLanguage(
+  projectRoot: string,
+  value: string,
+): Promise<NotificationLanguage> {
+  const root = resolve(projectRoot);
+  const bundle = await readProjectConfig(root);
+  const language = normalizeNotificationLanguage(value);
+  bundle.private.language = language;
+  await writeProjectConfig(root, bundle);
+  return language;
 }
 
 export async function testProject(

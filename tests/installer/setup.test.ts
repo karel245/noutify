@@ -14,6 +14,7 @@ import {
   buildClaudeHookCommand,
   confirmProject,
   doctorProject,
+  setProjectLanguage,
   setupProject,
   testProject,
   uninstallProject,
@@ -150,5 +151,21 @@ describe("Phase 0 setup lifecycle", () => {
     expect(
       result.checks.find((check) => check.name === "claude-stop-hook"),
     ).toMatchObject({ ok: false, message: "expected one Noutify Stop hook; found 2" });
+  });
+
+  it("sets an existing project's normalized notification language", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      ...runtime,
+    });
+
+    await expect(setProjectLanguage(root, "espa\u00f1ol")).resolves.toBe("es");
+    expect((await readProjectConfig(root)).private.language).toBe("es");
   });
 });
