@@ -695,7 +695,7 @@ Expected: all tests pass once, compilation succeeds, zero high vulnerabilities, 
 
 Confirm Git tracks no `.noutify.local.json`, `node_modules`, `dist`, `work` or real ntfy topic URL. Inspect `git diff origin/agent/agent-guided-installation...HEAD` and require only approved implementation, tests, docs, spec and plan files.
 
-- [ ] **Step 6: Commit the executed plan and push the PR branch**
+- [x] **Step 6: Commit the executed plan and push the PR branch**
 
 ```powershell
 git add -- docs/superpowers/plans/2026-08-07-friendly-topics-localization-compact-setup.md
@@ -704,6 +704,6 @@ git commit -m "docs: record localized setup verification"
 git push origin agent/agent-guided-installation
 ```
 
-- [ ] **Step 7: Verify remote synchronization and update PR description**
+- [x] **Step 7: Verify remote synchronization and update PR description**
 
 Compare `git rev-parse HEAD` with `git ls-remote origin refs/heads/agent/agent-guided-installation`. Update PR #1 summary and verification counts to cover friendly topics, localized notifications, `/noutify`, compact setup and the final suite. Keep the PR as draft unless the user explicitly requests ready-for-review status.
