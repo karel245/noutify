@@ -43,7 +43,7 @@
 - Consumes: existing CLI commands `setup`, `test`, `confirm` and `doctor`; the layout `<target>/Noutify/SETUP.md`.
 - Produces: an English `SETUP.md` contract that derives `$NOUTIFY_ROOT` and `$TARGET_ROOT`, plus automated assertions used by later documentation work.
 
-- [ ] **Step 1: Write the failing setup-contract tests**
+- [x] **Step 1: Write the failing setup-contract tests**
 
 Create `tests/docs/agent-installation.test.ts` with:
 
@@ -88,7 +88,7 @@ describe("agent-guided installation documentation", () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify the contract is absent**
+- [x] **Step 2: Run the focused test and verify the contract is absent**
 
 Run:
 
@@ -98,7 +98,7 @@ npm test -- tests/docs/agent-installation.test.ts
 
 Expected: FAIL because the current `SETUP.md` does not contain the one-line prompt, language precedence or automatic parent-path expression.
 
-- [ ] **Step 3: Rewrite `SETUP.md` as the operational contract**
+- [x] **Step 3: Rewrite `SETUP.md` as the operational contract**
 
 Use these exact top-level sections, in order:
 
@@ -174,7 +174,7 @@ node "$NOUTIFY_ROOT\dist\cli.js" doctor --project "$TARGET_ROOT"
 
 State verbatim: `Never repeat the topic in conversation, summaries, documentation, commits, issues, or agent-authored logs.` State that Claude must not run `confirm` until the user explicitly confirms receipt.
 
-- [ ] **Step 4: Run the focused test and verify the setup contract passes**
+- [x] **Step 4: Run the focused test and verify the setup contract passes**
 
 Run:
 
@@ -184,7 +184,7 @@ npm test -- tests/docs/agent-installation.test.ts
 
 Expected: 2 tests pass.
 
-- [ ] **Step 5: Review the contract for operational safety**
+- [x] **Step 5: Review the contract for operational safety**
 
 Run:
 
@@ -194,7 +194,7 @@ Select-String -Path SETUP.md -Pattern 'topic|confirm|settings.local.json|transcr
 
 Expected: the document protects the topic, forbids premature confirmation, preserves existing settings, forbids transcript reading and enforces Node.js 24+.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```powershell
 git add -- SETUP.md tests/docs/agent-installation.test.ts
@@ -215,7 +215,7 @@ git commit -m "docs: add agent-guided setup contract"
 - Consumes: exact prompt and safety contract established by Task 1.
 - Produces: consistent GitHub landing documentation and master context, protected by the same test suite.
 
-- [ ] **Step 1: Add failing cross-document consistency tests**
+- [x] **Step 1: Add failing cross-document consistency tests**
 
 Append these tests inside the existing `describe` block:
 
@@ -241,7 +241,7 @@ it("records agent-guided setup as the default Phase 0 flow", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify README/context are outdated**
+- [x] **Step 2: Run the focused test and verify README/context are outdated**
 
 Run:
 
@@ -251,7 +251,7 @@ npm test -- tests/docs/agent-installation.test.ts
 
 Expected: the two new tests fail because the current repository landing page and master context still lead with manual path variables.
 
-- [ ] **Step 3: Rewrite `README.md` around the quick install**
+- [x] **Step 3: Rewrite `README.md` around the quick install**
 
 Use this order:
 
@@ -288,7 +288,7 @@ Install Noutify following Noutify/SETUP.md.
 
 Explain that cloning to `Noutify/` works but creates a nested Git repository. State `Do not move or delete `Noutify/` after setup.` Keep manual CLI commands as an advanced reference, not the primary workflow.
 
-- [ ] **Step 4: Align `NOUTIFY_CONTEXT.md`**
+- [x] **Step 4: Align `NOUTIFY_CONTEXT.md`**
 
 Update its installation and roadmap prose so it states:
 
@@ -302,7 +302,7 @@ then English only as fallbacks.
 
 Preserve package-based distribution as a future improvement. Remove any claim that the primary user flow requires manually declaring `$NOUTIFY_ROOT` or `$TARGET_ROOT`.
 
-- [ ] **Step 5: Run documentation and full project verification**
+- [x] **Step 5: Run documentation and full project verification**
 
 Run:
 
@@ -315,7 +315,7 @@ git diff --check
 
 Expected: all documentation-contract and existing tests pass, type checking and build exit successfully, and Git reports no whitespace errors.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```powershell
 git add -- README.md NOUTIFY_CONTEXT.md tests/docs/agent-installation.test.ts
@@ -335,7 +335,7 @@ git commit -m "docs: simplify project-local installation"
 - Consumes: the completed setup contract and built CLI.
 - Produces: fresh end-to-end evidence and synchronized `origin/main` history.
 
-- [ ] **Step 1: Create a disposable nested-project layout without copying private or generated files**
+- [x] **Step 1: Create a disposable nested-project layout without copying private or generated files**
 
 Create `work/agent-install-smoke/TargetProject/Noutify/`, copy the tracked Noutify files into it while excluding `.git`, `node_modules`, `dist` and `work`, then verify:
 
@@ -345,7 +345,7 @@ work/agent-install-smoke/TargetProject/Noutify/package-lock.json
 work/agent-install-smoke/TargetProject/Noutify/src/cli.ts
 ```
 
-- [ ] **Step 2: Execute the documented non-phone stages in the disposable layout**
+- [x] **Step 2: Execute the documented non-phone stages in the disposable layout**
 
 From `TargetProject/`, use the documented path expressions, then run:
 
@@ -361,7 +361,7 @@ node "$NOUTIFY_ROOT\dist\cli.js" doctor --project "$TARGET_ROOT"
 
 Expected: build and tests succeed; setup creates the public/private configuration and one Claude Stop hook; `doctor` passes configuration, private-ignore and hook checks while reporting phone confirmation as pending. Do not run `test` or `confirm` in this smoke test because no real phone subscription was authorized.
 
-- [ ] **Step 3: Inspect generated files without printing secrets**
+- [x] **Step 3: Inspect generated files without printing secrets**
 
 Verify existence and structure only:
 
@@ -374,7 +374,7 @@ Select-String -Path "$TARGET_ROOT\.gitignore" -SimpleMatch '.noutify.local.json'
 
 Expected: every path check is `True` and the private ignore entry is present. Do not output `.noutify.local.json`.
 
-- [ ] **Step 4: Run final repository verification**
+- [x] **Step 4: Run final repository verification**
 
 ```powershell
 npm test
@@ -387,7 +387,7 @@ git status -sb
 
 Expected: all tests pass, type checking and build succeed, audit reports zero high-severity vulnerabilities, no whitespace errors exist and only the intentional plan-checkbox update remains.
 
-- [ ] **Step 5: Commit the executed plan record**
+- [x] **Step 5: Commit the executed plan record**
 
 ```powershell
 git add -- docs/superpowers/plans/2026-08-07-agent-guided-installation.md
@@ -395,7 +395,7 @@ git diff --cached --check
 git commit -m "docs: record installation verification"
 ```
 
-- [ ] **Step 6: Verify commit scope and secret hygiene**
+- [x] **Step 6: Verify commit scope and secret hygiene**
 
 Run staged/history inspections that confirm no `.noutify.local.json`, topic value, `node_modules`, `dist` or `work` content entered Git. Compare the complete diff from `origin/main` and ensure it contains only the approved design, plan, documentation and documentation-contract test.
 
