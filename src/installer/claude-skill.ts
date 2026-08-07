@@ -35,14 +35,14 @@ function buildClaudeSkillVersion(
   runtime: ClaudeSkillRuntime,
   version: "v0" | "v1",
 ): string {
-  const command = [
-    quoteArgument(runtime.nodePath),
-    quoteArgument(runtime.cliPath),
-    "language",
-    '"<language>"',
-    "--project",
-    quoteArgument(resolve(projectRoot)),
-  ].join(" ");
+  const command = (language: "en" | "es") => [
+      quoteArgument(runtime.nodePath),
+      quoteArgument(runtime.cliPath),
+      "language",
+      quoteArgument(language),
+      "--project",
+      quoteArgument(resolve(projectRoot)),
+    ].join(" ");
   return `<!-- noutify-managed:${version} -->
 ---
 name: noutify
@@ -54,8 +54,10 @@ disable-model-invocation: true
 Use \`$ARGUMENTS\` only for \`language <language>\`.
 
 1. Accept exactly two arguments whose first value is \`language\`; otherwise show \`/noutify language <english|español>\` and stop.
-2. Run the generated, quoted absolute command: \`${command}\`. Replace only \`<language>\` with the second argument. Do not run another Noutify subcommand.
-3. Report the command result. Never read or print \`.noutify.local.json\` or its topic.
+2. Accept the second argument case- and accent-insensitively only as \`es\`, \`spanish\`, \`español\`, \`espanol\`, or \`castellano\` and map it to the literal \`es\`; or case- and accent-insensitively only as \`en\`, \`english\`, \`inglés\`, or \`ingles\` and map it to the literal \`en\`.
+3. Unsupported or shell-active values must show \`/noutify language <english|español>\` and stop before execution. Never interpolate \`$ARGUMENTS\` or the raw second token into any shell command.
+4. Run exactly one generated, quoted absolute command after that mapping: Spanish \`${command("es")}\`; English \`${command("en")}\`. Do not run another Noutify subcommand.
+5. Report the command result. Never read or print \`.noutify.local.json\` or its topic.
 `;
 }
 

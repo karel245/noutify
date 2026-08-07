@@ -65,19 +65,37 @@ describe("owned Claude skill lifecycle", () => {
 
     const skill = await readFile(skillPath(root), "utf8");
     expect(skill).toBe(buildClaudeSkill(root, runtime));
-    expect(skill.startsWith(`<!-- noutify-managed:v1 -->
----
-name: noutify
-description: Configure Noutify for this project.
-argument-hint: language <english|español>
-disable-model-invocation: true
----
-`)).toBe(true);
+    expect(skill.startsWith([
+      "<!-- noutify-managed:v1 -->",
+      "---",
+      "name: noutify",
+      "description: Configure Noutify for this project.",
+      "argument-hint: language <english|español>",
+      "disable-model-invocation: true",
+      "---",
+      "",
+    ].join("\n"))).toBe(true);
     expect(skill).toContain("$ARGUMENTS");
     expect(skill).toContain("only for `language <language>`");
     expect(skill).toContain(
-      `"C:/Program Files/nodejs/node.exe" "C:/tools/noutify/dist/cli.js" language "<language>" --project "${root}"`,
+      "case- and accent-insensitively only as `es`, `spanish`, `español`, `espanol`, or `castellano`",
     );
+    expect(skill).toContain(
+      "case- and accent-insensitively only as `en`, `english`, `inglés`, or `ingles`",
+    );
+    expect(skill).toContain(
+      `"C:/Program Files/nodejs/node.exe" "C:/tools/noutify/dist/cli.js" language "es" --project "${root}"`,
+    );
+    expect(skill).toContain(
+      `"C:/Program Files/nodejs/node.exe" "C:/tools/noutify/dist/cli.js" language "en" --project "${root}"`,
+    );
+    expect(skill).toContain(
+      "Never interpolate `$ARGUMENTS` or the raw second token into any shell command.",
+    );
+    expect(skill).toContain(
+      "Unsupported or shell-active values must show `/noutify language <english|español>` and stop before execution.",
+    );
+    expect(skill).not.toContain('language "<language>"');
     expect(skill.endsWith("\n")).toBe(true);
     await expect(hasClaudeSkill(root, runtime)).resolves.toBe(true);
   });
