@@ -50,4 +50,24 @@ describe("agent-guided installation documentation", () => {
     expect(setup).toContain("npm run typecheck");
     expect(setup).toContain("npm run build");
   });
+
+  it("presents the same one-line quick start in the GitHub README", async () => {
+    const readme = await readRepositoryFile("README.md");
+
+    expect(readme).toContain("## Quick install with Claude Code");
+    expect(readme).toContain("Install Noutify following Noutify/SETUP.md.");
+    expect(readme).toContain("Download ZIP");
+    expect(readme).toContain("conversation language");
+    expect(readme).toContain("nested Git repository");
+    expect(readme).toContain("Do not move or delete `Noutify/`");
+  });
+
+  it("records agent-guided setup as the default Phase 0 flow", async () => {
+    const context = await readRepositoryFile("NOUTIFY_CONTEXT.md");
+
+    expect(context).toContain("project-local agent-guided installation");
+    expect(context).toContain("Install Noutify following Noutify/SETUP.md.");
+    expect(context).toContain("conversation language");
+    expect(context).toContain("OS UI locale");
+  });
 });
