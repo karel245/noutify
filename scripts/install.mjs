@@ -65,9 +65,19 @@ function sourceIsValid(root, isFile) {
 
 function isSetupRecord(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  if (!supportedLanguages.has(value.language) || typeof value.server !== "string") return false;
-  if (value.status === "existing") return true;
-  return value.status === "created" && typeof value.topic === "string";
+  if (!supportedLanguages.has(value.language) || !isHttpServer(value.server)) return false;
+  if (value.status === "existing") return !Object.hasOwn(value, "topic");
+  return value.status === "created" && typeof value.topic === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(value.topic);
+}
+
+function isHttpServer(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const server = new URL(value);
+    return server.protocol === "http:" || server.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function runStage(dependencies, stage, command, argumentsList, cwd, writePass = true) {

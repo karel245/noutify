@@ -157,7 +157,10 @@ describe("compact installer", () => {
         fixture.commands.push({ command, argumentsList, options });
         return {
           status: 0,
-          stdout: command === "node" ? "{}\n" : "",
+          stdout:
+            command === "node"
+              ? '{"status":"created","language":"en","server":"","topic":""}\n'
+              : "",
           stderr: command === "node" ? "setup warning\n" : "",
         };
       },
@@ -174,9 +177,31 @@ describe("compact installer", () => {
     ]);
     expect(fixture.output.stderr).toEqual([
       "FAIL setup (exit 1)\n",
-      "{}\nsetup warning\n",
+      '{"status":"created","language":"en","server":"","topic":""}\nsetup warning\n',
       "See Noutify/docs/setup-troubleshooting.md\n",
     ]);
+  });
+
+  it("does not forward a topic from an existing setup record", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout:
+            command === "node"
+              ? '{"status":"existing","language":"en","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n'
+              : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(fixture.output.stdout).not.toContain("PASS setup\n");
+    expect(fixture.output.stderr.join("")).toContain("Noutify-safe-topic");
   });
 
   it("uses an advanced project override only for the final setup stage", async () => {
