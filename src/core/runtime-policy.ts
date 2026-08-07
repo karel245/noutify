@@ -1,0 +1,3 @@
+export const NTFY_ATTEMPT_TIMEOUT_MS = 5_000;
+export const NTFY_RETRY_DELAY_MS = 500;
+export const CLAUDE_HOOK_TIMEOUT_MS = 12_000;
