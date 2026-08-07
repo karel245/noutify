@@ -70,17 +70,21 @@ is a project-local agent-guided installation:
    Install Noutify following Noutify/SETUP.md.
    ```
 
-3. Claude derives the Noutify root and target parent automatically.
-4. Claude validates, installs dependencies, tests, type-checks and builds.
-5. Claude configures the hook without replacing existing settings.
+3. Claude detects Spanish or English and runs the compact installer without
+   asking the user for paths.
+4. The installer validates, installs dependencies, tests, type-checks, builds,
+   and configures the hook without replacing existing settings.
+5. Claude reads the final structured record and shows a newly created topic once.
 6. Claude guides the user through private ntfy subscription and testing.
 7. The user explicitly confirms phone receipt.
 8. Claude runs diagnostics and describes any remaining real-device acceptance.
 
 The English setup contract is language-neutral infrastructure. Claude speaks in
-the conversation language, uses the OS UI locale only when the conversation is
-inconclusive, and falls back to English last. Commands, paths, filenames,
-configuration keys and literal output remain unchanged.
+the detected interaction language and uses `es` for Spanish or `en` for English.
+Spanish and English notifications follow that choice; `/noutify language` can
+change it later. New topics have the form `Noutify-[12 easy characters]`.
+Commands, paths, filenames, configuration keys, and literal output remain
+unchanged.
 
 The project-local `Noutify/` directory remains in place because Phase 0 installs
 an absolute path to its compiled runtime. Package-based distribution will remove
@@ -252,16 +256,17 @@ other providers remain outside the current phase.
 
 `SETUP.md` is an operational interface for Claude, not background prose. It must:
 
-- derive `Noutify/` and its parent project without manual path variables;
-- select the conversation language, then OS UI locale, then English;
-- verify Windows, Node.js 24+ and npm before target changes;
-- run locked dependency installation, tests, type checking and build;
-- invoke existing idempotent CLI behavior;
+- keep the successful state machine within 350 words and 2,500 characters;
+- select `es` for Spanish interaction and `en` for English interaction;
+- run `node Noutify/scripts/install.mjs --language <es|en>` without manual paths;
+- parse its final structured `created` or `existing` record;
+- show a newly created topic exactly once, but never repeat it;
 - never repeat the topic in agent-authored text or artifacts;
 - pause before sending a test;
 - require explicit phone receipt before `confirm`;
 - run `doctor` and disclose pending real-device acceptance accurately;
-- preserve unrelated hooks and malformed settings instead of overwriting them.
+- preserve unrelated hooks and malformed settings instead of overwriting them;
+- load `docs/setup-troubleshooting.md` only for recovery.
 
 The standard user prompt is:
 

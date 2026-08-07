@@ -44,24 +44,26 @@ Open Claude Code from `TargetProject/` and send this one-line prompt:
 Install Noutify following Noutify/SETUP.md.
 ```
 
-Claude will locate both directories, verify Node.js, install dependencies, run
-the test suite and type checker, build Noutify, configure the project-local Stop
-hook, and guide the phone connection.
+Claude detects your language, runs the single compact installer, reads its
+structured final record, and configures the project-local Stop hook. The
+installer verifies Node.js, dependencies, tests, type checking, and the build.
 
 ### 4. Follow the phone prompts
 
-Claude will ask you to subscribe to a private ntfy topic and then send a
-`Noutify connected` test. Tell Claude whether it arrived. Noutify becomes active
-only after your explicit confirmation, followed by a successful diagnostic.
+Claude shows a newly created topic once, asks you to subscribe, then sends a
+localized test. Tell Claude whether it arrived. Noutify becomes active only
+after your explicit confirmation, followed by a successful diagnostic.
 
 Never publish or paste the topic. Treat it like a password.
+New topics use the phone-friendly form `Noutify-[12 easy characters]`.
 
 ## How language selection works
 
 The setup contract is written once in English, but Claude conducts the
-installation in your conversation language. If the conversation does not reveal
-a preference, Claude checks the operating-system UI locale and finally falls
-back to English. You can request another language at any time.
+installation in the detected interaction language. Spanish and English notifications
+use the language selected during setup. Later, use
+`/noutify language español` or `/noutify language english` in the project to
+change notification language.
 
 Commands, paths, filenames, configuration keys and literal program output stay
 unchanged so the procedure remains reproducible in every language.
@@ -117,14 +119,7 @@ noutify test [--project PATH]
 noutify confirm [--project PATH]
 noutify doctor [--project PATH]
 noutify uninstall [--project PATH]
-```
-
-From a target project containing `Noutify/`:
-
-```powershell
-$NOUTIFY_ROOT = (Resolve-Path 'Noutify').Path
-$TARGET_ROOT = (Resolve-Path (Split-Path -Parent $NOUTIFY_ROOT)).Path
-node "$NOUTIFY_ROOT\dist\cli.js" doctor --project "$TARGET_ROOT"
+noutify language <language> [--project PATH]
 ```
 
 `hook claude-stop` is internal. It reads the Claude hook payload from stdin,
@@ -165,7 +160,7 @@ Uninstall Noutify following Noutify/SETUP.md.
 Or run the advanced command:
 
 ```powershell
-node "$NOUTIFY_ROOT\dist\cli.js" uninstall --project "$TARGET_ROOT"
+node Noutify/dist/cli.js uninstall
 ```
 
 Uninstall removes only the exact Noutify Stop hook. It preserves unrelated
