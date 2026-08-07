@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +9,11 @@ import {
   writeProjectConfig,
 } from "../../src/config/project-config.js";
 import type { Notification } from "../../src/core/types.js";
-import { hasClaudeStopHook } from "../../src/installer/claude-settings.js";
+import {
+  hasClaudeStopHook,
+  uninstallClaudeStopHook,
+} from "../../src/installer/claude-settings.js";
+import { hasClaudeSkill } from "../../src/installer/claude-skill.js";
 import {
   buildClaudeHookCommand,
   confirmProject,
@@ -66,6 +70,7 @@ describe("Phase 0 setup lifecycle", () => {
       topic,
     });
     await expect(hasClaudeStopHook(root, command)).resolves.toBe(true);
+    await expect(hasClaudeSkill(root, runtime)).resolves.toBe(true);
 
     const settingsText = await readFile(
       join(root, ".claude", "settings.local.json"),
@@ -97,12 +102,14 @@ describe("Phase 0 setup lifecycle", () => {
 
     const diagnosis = await doctorProject(root, runtime);
     expect(diagnosis.ok).toBe(true);
+    expect(diagnosis.checks).toHaveLength(5);
     expect(diagnosis.checks.every((check) => check.ok)).toBe(true);
     expect(JSON.stringify(diagnosis)).not.toContain(topic);
 
     const uninstall = await uninstallProject(root, runtime);
     expect(uninstall).toEqual({ changed: true, configPreserved: true });
     await expect(hasClaudeStopHook(root, command)).resolves.toBe(false);
+    await expect(hasClaudeSkill(root, runtime)).resolves.toBe(false);
     await expect(readProjectConfig(root)).resolves.toBeDefined();
   });
 
@@ -153,6 +160,52 @@ describe("Phase 0 setup lifecycle", () => {
     ).toMatchObject({ ok: false, message: "expected one Noutify Stop hook; found 2" });
   });
 
+  it("fails doctor when the Noutify skill is modified", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      ...runtime,
+    });
+    await confirmProject(root);
+    await writeFile(
+      join(root, ".claude", "skills", "noutify", "SKILL.md"),
+      "<!-- noutify-managed:v1 -->\nmodified\n",
+      "utf8",
+    );
+
+    const result = await doctorProject(root, runtime);
+
+    expect(result.ok).toBe(false);
+    expect(
+      result.checks.find((check) => check.name === "claude-skill"),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("reports changed when uninstall removes only the Noutify skill", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      ...runtime,
+    });
+    await uninstallClaudeStopHook(root, buildClaudeHookCommand(root, runtime));
+
+    await expect(uninstallProject(root, runtime)).resolves.toEqual({
+      changed: true,
+      configPreserved: true,
+    });
+    await expect(hasClaudeSkill(root, runtime)).resolves.toBe(false);
+  });
+
   it("sets an existing project's normalized notification language", async () => {
     const root = await temporaryProject();
     const runtime = {
@@ -167,5 +220,86 @@ describe("Phase 0 setup lifecycle", () => {
 
     await expect(setProjectLanguage(root, "espa\u00f1ol")).resolves.toBe("es");
     expect((await readProjectConfig(root)).private.language).toBe("es");
+  });
+
+  it("restores every setup target when the final skill write fails", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const ignorePath = join(root, ".gitignore");
+    const settingsPath = join(root, ".claude", "settings.local.json");
+    const backupPath = `${settingsPath}.noutify-backup`;
+    const publicPath = join(root, "noutify.config.json");
+    const privatePath = join(root, ".noutify.local.json");
+    const skillPath = join(root, ".claude", "skills", "noutify", "SKILL.md");
+    const noutifySkillDirectory = join(root, ".claude", "skills", "noutify");
+    const otherSkill = join(root, ".claude", "skills", "other", "SKILL.md");
+    const originalIgnore = "dist/\n";
+    const originalSettings = '{\n  "permissions": { "allow": ["Read"] }\n}\n';
+    await writeFile(ignorePath, originalIgnore, "utf8");
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(settingsPath, originalSettings, "utf8");
+    await mkdir(join(root, ".claude", "skills", "other"), { recursive: true });
+    await writeFile(otherSkill, "# Other skill\n", "utf8");
+
+    await expect(
+      setupProject(
+        {
+          projectRoot: root,
+          topic: "private_topic_1234567890",
+          ...runtime,
+        },
+        {
+          installSkill: async () => {
+            await mkdir(noutifySkillDirectory, { recursive: true });
+            await writeFile(skillPath, "partial skill\n", "utf8");
+            throw new Error("skill write failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("skill write failed");
+
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe(originalIgnore);
+    await expect(readFile(settingsPath, "utf8")).resolves.toBe(originalSettings);
+    await expect(access(publicPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(privatePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(noutifySkillDirectory)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(otherSkill, "utf8")).resolves.toBe("# Other skill\n");
+    await expect(access(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves a pre-existing empty Noutify skill directory during rollback", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const skillDirectory = join(root, ".claude", "skills", "noutify");
+    const skillPath = join(skillDirectory, "SKILL.md");
+    await mkdir(skillDirectory, { recursive: true });
+
+    await expect(
+      setupProject(
+        {
+          projectRoot: root,
+          topic: "private_topic_1234567890",
+          ...runtime,
+        },
+        {
+          installSkill: async () => {
+            await writeFile(skillPath, "partial skill\n", "utf8");
+            throw new Error("skill write failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("skill write failed");
+
+    await expect(access(skillDirectory)).resolves.toBeUndefined();
+    await expect(access(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -25,6 +25,17 @@ import {
   installClaudeStopHook,
   uninstallClaudeStopHook,
 } from "./claude-settings.js";
+import {
+  hasClaudeSkill,
+  installClaudeSkill,
+  preflightClaudeSkill,
+  removeEmptyClaudeSkillDirectory,
+  uninstallClaudeSkill,
+} from "./claude-skill.js";
+import {
+  restoreFileSnapshots,
+  snapshotFiles,
+} from "./file-snapshot.js";
 
 export interface RuntimePaths {
   nodePath: string;
@@ -48,13 +59,22 @@ export interface SetupProjectResult {
   hookCommand: string;
 }
 
+export interface SetupDependencies {
+  installSkill?: typeof installClaudeSkill;
+}
+
 export type NotificationSender = (
   notification: Notification,
   config: NtfyConfig,
 ) => Promise<SendResult>;
 
 export interface DoctorCheck {
-  name: "configuration" | "private-ignore" | "claude-stop-hook" | "confirmed";
+  name:
+    | "configuration"
+    | "private-ignore"
+    | "claude-stop-hook"
+    | "claude-skill"
+    | "confirmed";
   ok: boolean;
   message: string;
 }
@@ -93,48 +113,72 @@ async function exists(path: string): Promise<boolean> {
 
 export async function setupProject(
   input: SetupProjectInput,
+  dependencies: SetupDependencies = {},
 ): Promise<SetupProjectResult> {
   const projectRoot = resolve(input.projectRoot);
+  await preflightClaudeSkill(projectRoot, input);
   const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
   const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
+  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
+  const skillDirectory = join(projectRoot, ".claude", "skills", "noutify");
+  const skillPath = join(skillDirectory, "SKILL.md");
+  const skillDirectoryExisted = await exists(skillDirectory);
+  const snapshots = await snapshotFiles([
+    join(projectRoot, ".gitignore"),
+    join(projectRoot, PUBLIC_CONFIG_FILE),
+    join(projectRoot, PRIVATE_CONFIG_FILE),
+    settingsPath,
+    `${settingsPath}.noutify-backup`,
+    skillPath,
+  ]);
   let created = false;
   let bundle;
-
-  if (publicExists || privateExists) {
-    if (!publicExists || !privateExists) {
-      throw new Error(
-        "Noutify configuration is incomplete; both public and private files are required",
-      );
+  try {
+    if (publicExists || privateExists) {
+      if (!publicExists || !privateExists) {
+        throw new Error(
+          "Noutify configuration is incomplete; both public and private files are required",
+        );
+      }
+      bundle = await readProjectConfig(projectRoot);
+      await ensurePrivateIgnore(projectRoot);
+    } else {
+      const initialInput: {
+        projectName: string;
+        server?: string;
+        topic?: string;
+        language?: NotificationLanguage;
+      } = {
+        projectName: input.projectName?.trim() || basename(projectRoot),
+      };
+      if (input.server !== undefined) initialInput.server = input.server;
+      if (input.topic !== undefined) initialInput.topic = input.topic;
+      if (input.language !== undefined) initialInput.language = input.language;
+      bundle = createInitialConfig(initialInput);
+      await writeProjectConfig(projectRoot, bundle);
+      created = true;
     }
-    bundle = await readProjectConfig(projectRoot);
-    await ensurePrivateIgnore(projectRoot);
-  } else {
-    const initialInput: {
-      projectName: string;
-      server?: string;
-      topic?: string;
-      language?: NotificationLanguage;
-    } = {
-      projectName: input.projectName?.trim() || basename(projectRoot),
-    };
-    if (input.server !== undefined) initialInput.server = input.server;
-    if (input.topic !== undefined) initialInput.topic = input.topic;
-    if (input.language !== undefined) initialInput.language = input.language;
-    bundle = createInitialConfig(initialInput);
-    await writeProjectConfig(projectRoot, bundle);
-    created = true;
-  }
 
-  const hookCommand = buildClaudeHookCommand(projectRoot, input);
-  const hook = await installClaudeStopHook(projectRoot, hookCommand);
-  return {
-    created,
-    hookChanged: hook.changed,
-    topic: bundle.private.topic,
-    language: bundle.private.language,
-    server: bundle.private.server,
-    hookCommand,
-  };
+    const hookCommand = buildClaudeHookCommand(projectRoot, input);
+    const hook = await installClaudeStopHook(projectRoot, hookCommand);
+    const installSkill = dependencies.installSkill ?? installClaudeSkill;
+    await installSkill(projectRoot, input);
+    return {
+      created,
+      hookChanged: hook.changed,
+      topic: bundle.private.topic,
+      language: bundle.private.language,
+      server: bundle.private.server,
+      hookCommand,
+    };
+  } catch (error) {
+    await restoreFileSnapshots(snapshots);
+    const skillSnapshot = snapshots.find((snapshot) => snapshot.path === skillPath);
+    if (skillSnapshot?.contents === null && !skillDirectoryExisted) {
+      await removeEmptyClaudeSkillDirectory(projectRoot);
+    }
+    throw error;
+  }
 }
 
 export async function setProjectLanguage(
@@ -215,6 +259,15 @@ export async function doctorProject(
       : `expected one Noutify Stop hook; found ${hookCount}`,
   });
 
+  const skillInstalled = await hasClaudeSkill(root, runtime).catch(() => false);
+  checks.push({
+    name: "claude-skill",
+    ok: skillInstalled,
+    message: skillInstalled
+      ? "Claude Code Noutify skill is installed"
+      : "Claude Code Noutify skill is missing or modified",
+  });
+
   const confirmed = bundle?.private.setupCompleted === true;
   checks.push({
     name: "confirmed",
@@ -233,6 +286,9 @@ export async function uninstallProject(
 ): Promise<{ changed: boolean; configPreserved: true }> {
   const root = resolve(projectRoot);
   const command = buildClaudeHookCommand(root, runtime);
-  const result = await uninstallClaudeStopHook(root, command);
-  return { changed: result.changed, configPreserved: true };
+  const [hook, skill] = await Promise.all([
+    uninstallClaudeStopHook(root, command),
+    uninstallClaudeSkill(root, runtime),
+  ]);
+  return { changed: hook.changed || skill.changed, configPreserved: true };
 }

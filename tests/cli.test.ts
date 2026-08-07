@@ -9,6 +9,8 @@ import {
   readProjectConfig,
   writeProjectConfig,
 } from "../src/config/project-config.js";
+import { uninstallClaudeStopHook } from "../src/installer/claude-settings.js";
+import { buildClaudeHookCommand } from "../src/installer/setup.js";
 import { runCli } from "../src/cli.js";
 
 const temporaryRoots: string[] = [];
@@ -101,6 +103,37 @@ describe("runCli", () => {
         dependencies,
       ),
     ).toBe(0);
+  });
+
+  it("reports an integration removal when uninstall removes only the skill", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await uninstallClaudeStopHook(
+      root,
+      buildClaudeHookCommand(root, dependencies),
+    );
+    const output = memoryIo();
+
+    expect(
+      await runCli(["uninstall", "--project", root], output.io, dependencies),
+    ).toBe(0);
+    expect(output.stdout).toEqual([
+      "Noutify integration removed; configuration was preserved.",
+    ]);
   });
 
   it("keeps the internal Stop hook silent on stdout and stderr", async () => {

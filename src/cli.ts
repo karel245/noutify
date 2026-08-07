@@ -265,8 +265,8 @@ export async function runCli(
         const result = await uninstallProject(projectRoot, runtime);
         io.writeStdout(
           result.changed
-            ? "Noutify hook removed; configuration was preserved."
-            : "No matching Noutify hook was installed; configuration was preserved.",
+            ? "Noutify integration removed; configuration was preserved."
+            : "No matching Noutify integration was installed; configuration was preserved.",
         );
         return 0;
       }
