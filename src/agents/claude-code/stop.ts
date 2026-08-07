@@ -1,3 +1,4 @@
+import type { NotificationLanguage } from "../../config/language.js";
 import { createWaitingNotification } from "../../core/waiting-notification.js";
 import type { Notification } from "../../core/types.js";
 
@@ -7,6 +8,7 @@ export interface ClaudeStopPayload {
 
 export interface ClaudeStopContext {
   projectName: string;
+  language: NotificationLanguage;
   send: (notification: Notification) => Promise<unknown>;
 }
 
@@ -40,7 +42,9 @@ export async function handleClaudeStop(
       return;
     }
 
-    await context.send(createWaitingNotification(context.projectName));
+    await context.send(
+      createWaitingNotification(context.projectName, context.language),
+    );
   } catch {
     // Notification delivery is best-effort and never alters Claude's Stop flow.
   }

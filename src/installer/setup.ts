@@ -9,6 +9,7 @@ import {
   readProjectConfig,
   writeProjectConfig,
 } from "../config/project-config.js";
+import { notificationCopy } from "../core/notification-catalog.js";
 import type { Notification } from "../core/types.js";
 import {
   type NtfyConfig,
@@ -130,9 +131,10 @@ export async function testProject(
   sender: NotificationSender = sendNtfy,
 ): Promise<SendResult> {
   const bundle = await readProjectConfig(resolve(projectRoot));
+  const copy = notificationCopy(bundle.private.language);
   const notification: Notification = {
-    title: "Noutify connected",
-    message: `${bundle.public.project.name}: Test notification delivered by Noutify.`,
+    title: copy.testTitle,
+    message: copy.testMessage(bundle.public.project.name),
     tags: ["white_check_mark"],
     priority: "default",
   };

@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { readProjectConfig } from "../../src/config/project-config.js";
+import {
+  readProjectConfig,
+  writeProjectConfig,
+} from "../../src/config/project-config.js";
 import type { Notification } from "../../src/core/types.js";
 import { hasClaudeStopHook } from "../../src/installer/claude-settings.js";
 import {
@@ -70,6 +73,9 @@ describe("Phase 0 setup lifecycle", () => {
     expect(settingsText.match(/hook claude-stop/g)).toHaveLength(1);
 
     const sent: Notification[] = [];
+    const configured = await readProjectConfig(root);
+    configured.private.language = "es";
+    await writeProjectConfig(root, configured);
     const testResult = await testProject(root, async (notification) => {
       sent.push(notification);
       return { ok: true, attempts: 1 } as const;
@@ -77,8 +83,8 @@ describe("Phase 0 setup lifecycle", () => {
     expect(testResult).toEqual({ ok: true, attempts: 1 });
     expect(sent).toEqual([
       {
-        title: "Noutify connected",
-        message: "Demo: Test notification delivered by Noutify.",
+        title: "Noutify conectado",
+        message: "Demo: Notificación de prueba enviada por Noutify.",
         tags: ["white_check_mark"],
         priority: "default",
       },

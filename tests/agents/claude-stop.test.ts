@@ -33,6 +33,7 @@ describe("handleClaudeStop", () => {
 
     await handleClaudeStop('{"stop_hook_active":true}', {
       projectName: "Demo",
+      language: "en",
       send: async (notification) => {
         sent.push(notification);
       },
@@ -41,13 +42,14 @@ describe("handleClaudeStop", () => {
     expect(sent).toEqual([]);
   });
 
-  it("sends the fixed WAITING notification without transcript content", async () => {
+  it("sends Spanish WAITING copy without transcript content", async () => {
     const sent: Notification[] = [];
 
     await handleClaudeStop(
       '{"stop_hook_active":false,"transcript_path":"C:/private/transcript.jsonl"}',
       {
         projectName: "Demo",
+        language: "es",
         send: async (notification) => {
           sent.push(notification);
         },
@@ -56,9 +58,8 @@ describe("handleClaudeStop", () => {
 
     expect(sent).toEqual([
       {
-        title: "Agent waiting",
-        message:
-          "Demo: The agent finished its response and is waiting for the next prompt.",
+        title: "Agente en espera",
+        message: "Demo: El agente terminó su respuesta y espera instrucciones.",
         tags: ["speech_balloon", "hourglass"],
         priority: "default",
       },
@@ -70,6 +71,7 @@ describe("handleClaudeStop", () => {
     await expect(
       handleClaudeStop("not-json", {
         projectName: "Demo",
+        language: "en",
         send: async () => {
           throw new Error("provider unavailable");
         },

@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -133,6 +133,53 @@ describe("runCli", () => {
     );
 
     expect(exitCode).toBe(0);
+    expect(hookIo.stdout).toEqual([]);
+    expect(hookIo.stderr).toEqual([]);
+  });
+
+  it("passes stored Spanish language to the silent Stop hook", async () => {
+    const root = await temporaryProject();
+    const sent: Notification[] = [];
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async (notification: Notification) => {
+        sent.push(notification);
+        return { ok: true, attempts: 1 } as const;
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const bundle = await readProjectConfig(root);
+    bundle.private.language = "es";
+    await writeProjectConfig(root, bundle);
+    const hookIo = memoryIo('{"stop_hook_active":false}');
+
+    expect(
+      await runCli(
+        ["hook", "claude-stop", "--project", root],
+        hookIo.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(sent).toEqual([
+      {
+        title: "Agente en espera",
+        message: `${basename(root)}: El agente terminó su respuesta y espera instrucciones.`,
+        tags: ["speech_balloon", "hourglass"],
+        priority: "default",
+      },
+    ]);
     expect(hookIo.stdout).toEqual([]);
     expect(hookIo.stderr).toEqual([]);
   });

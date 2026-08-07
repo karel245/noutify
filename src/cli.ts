@@ -130,6 +130,7 @@ async function runClaudeStopHook(
     }
     await handleClaudeStop(input, {
       projectName: bundle.public.project.name,
+      language: bundle.private.language,
       send: (notification) => sender(notification, bundle.private),
     });
   } catch {
