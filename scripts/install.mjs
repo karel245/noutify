@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,7 +16,13 @@ function defaultDependencies() {
     platform: process.platform,
     nodeVersion: process.versions.node,
     noutifyRoot: defaultRoot(),
-    isFile: existsSync,
+    isFile: (path) => {
+      try {
+        return statSync(path).isFile();
+      } catch {
+        return false;
+      }
+    },
     run: (command, argumentsList, options) =>
       spawnSync(command, argumentsList, { ...options, encoding: "utf8" }),
     writeStdout: (text) => process.stdout.write(text),
@@ -57,6 +63,13 @@ function sourceIsValid(root, isFile) {
   );
 }
 
+function isSetupRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!supportedLanguages.has(value.language) || typeof value.server !== "string") return false;
+  if (value.status === "existing") return true;
+  return value.status === "created" && typeof value.topic === "string";
+}
+
 function runStage(dependencies, stage, command, argumentsList, cwd, writePass = true) {
   const result = dependencies.run(command, argumentsList, { cwd });
   if (result.status !== 0) {
@@ -67,7 +80,11 @@ function runStage(dependencies, stage, command, argumentsList, cwd, writePass = 
     };
   }
   if (writePass) dependencies.writeStdout(`PASS ${stage}\n`);
-  return { ok: true, stdout: String(result.stdout ?? "") };
+  return {
+    ok: true,
+    stdout: String(result.stdout ?? ""),
+    diagnostics: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 export async function runInstall(argv, suppliedDependencies = {}) {
@@ -126,9 +143,9 @@ export async function runInstall(argv, suppliedDependencies = {}) {
     if (stage === "setup") {
       const finalLine = result.stdout.trim().split(/\r?\n/).at(-1);
       try {
-        JSON.parse(finalLine);
+        if (!isSetupRecord(JSON.parse(finalLine))) throw new Error("invalid setup record");
       } catch {
-        return writeFailure(dependencies, "setup", 1, "setup did not return a JSON result");
+        return writeFailure(dependencies, "setup", 1, result.diagnostics);
       }
       dependencies.writeStdout("PASS setup\n");
       dependencies.writeStdout(`${finalLine}\n`);

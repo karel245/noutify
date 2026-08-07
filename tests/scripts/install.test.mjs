@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { dirname, join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 import { parseArguments, runInstall } from "../../scripts/install.mjs";
 
@@ -7,6 +9,11 @@ const noutifyRoot = join("workspace", "TargetProject", "Noutify");
 const targetRoot = dirname(noutifyRoot);
 const cliPath = join(noutifyRoot, "dist", "cli.js");
 const overrideRoot = join("workspace", "Elsewhere");
+const temporaryRoots = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function successfulRunner(commands) {
   return (command, argumentsList, options) => {
@@ -15,7 +22,7 @@ function successfulRunner(commands) {
       status: 0,
       stdout:
         command === "node"
-          ? "{" + '"status":"created","language":"es","topic":"Noutify-safe-topic"' + "}\n"
+          ? "{" + '"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"' + "}\n"
           : "verbose child output\n",
       stderr: "",
     };
@@ -74,7 +81,7 @@ describe("compact installer", () => {
       "PASS typecheck\n",
       "PASS build\n",
       "PASS setup\n",
-      '{"status":"created","language":"es","topic":"Noutify-safe-topic"}\n',
+      '{"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n',
     ]);
     expect(fixture.output.stdout.join("")).not.toContain("verbose child output");
     expect(fixture.output.stderr).toEqual([]);
@@ -88,6 +95,24 @@ describe("compact installer", () => {
     expect(exitCode).toBe(1);
     expect(fixture.commands).toEqual([]);
     expect(fixture.output.stderr.join("")).toContain("Node.js 24 or newer is required");
+  });
+
+  it("rejects a required source path that is a directory before running any stage", async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), "noutify-install-"));
+    temporaryRoots.push(temporaryRoot);
+    const sourceRoot = join(temporaryRoot, "Noutify");
+    await mkdir(join(sourceRoot, "src"), { recursive: true });
+    await mkdir(join(sourceRoot, "package.json"));
+    await writeFile(join(sourceRoot, "package-lock.json"), "{}\n");
+    await writeFile(join(sourceRoot, "src", "cli.ts"), "export {};\n");
+    const fixture = createDependencies({ noutifyRoot: sourceRoot });
+    delete fixture.dependencies.isFile;
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(fixture.commands).toEqual([]);
+    expect(fixture.output.stderr.join("")).toContain("Noutify source files are incomplete");
   });
 
   it("rejects unsupported languages before running any stage", async () => {
@@ -126,14 +151,14 @@ describe("compact installer", () => {
     ]);
   });
 
-  it("does not report setup passed when its successful process output lacks JSON", async () => {
+  it("does not report setup passed when its successful process output lacks a setup record", async () => {
     const fixture = createDependencies({
       run: (command, argumentsList, options) => {
         fixture.commands.push({ command, argumentsList, options });
         return {
           status: 0,
-          stdout: command === "node" ? "unexpected setup output\n" : "",
-          stderr: "",
+          stdout: command === "node" ? "{}\n" : "",
+          stderr: command === "node" ? "setup warning\n" : "",
         };
       },
     });
@@ -147,7 +172,11 @@ describe("compact installer", () => {
       "PASS typecheck\n",
       "PASS build\n",
     ]);
-    expect(fixture.output.stderr.join("")).toContain("setup did not return a JSON result");
+    expect(fixture.output.stderr).toEqual([
+      "FAIL setup (exit 1)\n",
+      "{}\nsetup warning\n",
+      "See Noutify/docs/setup-troubleshooting.md\n",
+    ]);
   });
 
   it("uses an advanced project override only for the final setup stage", async () => {
