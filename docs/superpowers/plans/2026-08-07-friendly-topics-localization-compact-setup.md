@@ -62,7 +62,7 @@
 - Produces: `PrivateProjectConfig.language: NotificationLanguage` and `InitialConfigInput.language?: NotificationLanguage`.
 - Consumed by: notification catalog, CLI language command, setup and bootstrap tasks.
 
-- [ ] **Step 1: Write failing topic and language tests**
+- [x] **Step 1: Write failing topic and language tests**
 
 Create `tests/config/topic.test.ts`:
 
@@ -122,7 +122,7 @@ describe("notification language", () => {
 
 Extend `tests/config/project-config.test.ts` to assert a new default topic matches the friendly regex, new configurations persist `language: "es"`, and a manually written legacy private config without `language` reads as `language: "en"`.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 ```powershell
 npm test -- tests/config/topic.test.ts tests/config/language.test.ts tests/config/project-config.test.ts
@@ -130,7 +130,7 @@ npm test -- tests/config/topic.test.ts tests/config/language.test.ts tests/confi
 
 Expected: failures because the two modules and private language field do not exist and the current topic lacks the prefix.
 
-- [ ] **Step 3: Implement the minimal configuration modules**
+- [x] **Step 3: Implement the minimal configuration modules**
 
 Create `src/config/language.ts` with these exports and behavior:
 
@@ -176,7 +176,7 @@ export function generateFriendlyTopic(nextIndex: RandomIndex = randomInt): strin
 
 Modify `project-config.ts` to allow `language` in private keys, return `validateStoredLanguage(privateValue.language)`, accept optional canonical language on initial input, and replace the `randomBytes` default with `generateFriendlyTopic()`.
 
-- [ ] **Step 4: Run focused and full configuration tests GREEN**
+- [x] **Step 4: Run focused and full configuration tests GREEN**
 
 ```powershell
 npm test -- tests/config
@@ -185,7 +185,7 @@ npm run typecheck
 
 Expected: topic/language/configuration tests pass and TypeScript reports no errors.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```powershell
 git add -- src/config/topic.ts src/config/language.ts src/config/project-config.ts tests/config
@@ -213,7 +213,7 @@ git commit -m "feat: add friendly topics and language config"
 - Produces: `notificationText(language, key, projectName)` and language-aware `createWaitingNotification(projectName, language)`.
 - Produces: Spanish/English `testProject` and Stop-hook notifications.
 
-- [ ] **Step 1: Add failing English and Spanish notification tests**
+- [x] **Step 1: Add failing English and Spanish notification tests**
 
 Update waiting tests to call:
 
@@ -241,7 +241,7 @@ Update setup tests so an `es` installation sends:
 
 Update Claude Stop tests so `ClaudeStopContext` requires `language` and verifies Spanish reaches the injected sender. Add a CLI hook assertion that its stored Spanish language reaches the Stop adapter while stdout/stderr remain empty.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 ```powershell
 npm test -- tests/core/waiting-notification.test.ts tests/agents/claude-stop.test.ts tests/installer/setup.test.ts tests/cli.test.ts
@@ -249,7 +249,7 @@ npm test -- tests/core/waiting-notification.test.ts tests/agents/claude-stop.tes
 
 Expected: failures from the old one-argument composer and hard-coded English test notification.
 
-- [ ] **Step 3: Implement the catalog and language propagation**
+- [x] **Step 3: Implement the catalog and language propagation**
 
 Create `src/core/notification-catalog.ts` with a typed catalog:
 
@@ -285,7 +285,7 @@ export function notificationCopy(language: NotificationLanguage) {
 
 Update `createWaitingNotification` and `ClaudeStopContext` with the canonical language. In `runClaudeStopHook`, pass `bundle.private.language`. In `testProject`, select title/message from the same catalog.
 
-- [ ] **Step 4: Run focused tests, full tests and typecheck GREEN**
+- [x] **Step 4: Run focused tests, full tests and typecheck GREEN**
 
 ```powershell
 npm test -- tests/core tests/agents tests/installer/setup.test.ts tests/cli.test.ts
@@ -295,7 +295,7 @@ npm run typecheck
 
 Expected: all localized and regression tests pass with no hook output changes.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```powershell
 git add -- src/core src/agents/claude-code/stop.ts src/installer/setup.ts src/cli.ts tests/core tests/agents tests/installer/setup.test.ts tests/cli.test.ts
@@ -319,7 +319,7 @@ git commit -m "feat: localize Noutify notifications"
 - Produces CLI: `language <language> [--project PATH]`, `setup --language <language>` and `setup --format json`.
 - Produces JSON setup records consumed by Task 5.
 
-- [ ] **Step 1: Add failing CLI lifecycle tests**
+- [x] **Step 1: Add failing CLI lifecycle tests**
 
 Add tests that:
 
@@ -342,7 +342,7 @@ setup must report its stored language and must not use `--language` to silently
 change an existing preference; `/noutify language` is the only language mutation
 path for an existing installation.
 
-- [ ] **Step 2: Run CLI/setup tests and verify RED**
+- [x] **Step 2: Run CLI/setup tests and verify RED**
 
 ```powershell
 npm test -- tests/cli.test.ts tests/installer/setup.test.ts
@@ -350,7 +350,7 @@ npm test -- tests/cli.test.ts tests/installer/setup.test.ts
 
 Expected: `language`, `--language`, and `--format` are unknown.
 
-- [ ] **Step 3: Implement positional language parsing and mutation**
+- [x] **Step 3: Implement positional language parsing and mutation**
 
 Extend parsed arguments with `operands: string[]`. Allow one operand only for `language`, keep `hook claude-stop` handling unchanged, and reject operands for every other command. Allow setup options `project`, `server`, `topic`, `language`, `format`; accept only `format=json`.
 
@@ -375,7 +375,7 @@ the CLI never re-reads or reconstructs those fields for JSON output.
 
 Return Spanish confirmation for `es` and English confirmation for `en`. JSON setup output includes topic only when `result.created` is true. Human setup output keeps the new topic display for initial setup and never displays an existing topic as new.
 
-- [ ] **Step 4: Run CLI/setup tests, full suite and build GREEN**
+- [x] **Step 4: Run CLI/setup tests, full suite and build GREEN**
 
 ```powershell
 npm test -- tests/cli.test.ts tests/installer/setup.test.ts
@@ -386,7 +386,7 @@ npm run build
 
 Expected: new command and setup formats pass without changing malformed-hook silence.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 ```powershell
 git add -- src/cli.ts src/installer/setup.ts tests/cli.test.ts tests/installer/setup.test.ts
@@ -410,7 +410,7 @@ git commit -m "feat: add notification language command"
 - Produces: `snapshotFiles(paths)` and `restoreFileSnapshots(snapshots)`.
 - Consumes: runtime paths and target project root from setup.
 
-- [ ] **Step 1: Write failing skill ownership tests**
+- [x] **Step 1: Write failing skill ownership tests**
 
 Create tests for absent creation, exact idempotency, recognized `v0` upgrade, unrelated collision refusal, exact uninstall and preservation of other skill directories. Assert the generated file begins with:
 
@@ -428,7 +428,7 @@ Assert the body mentions `$ARGUMENTS`, permits only `language <language>`, and i
 
 Add a setup rollback test with injected `installSkill` that throws after config and hook writes. Snapshot the initial `.gitignore`, settings and absence of configs/skill; assert all are restored byte-for-byte and no settings backup remains.
 
-- [ ] **Step 2: Run installer tests and verify RED**
+- [x] **Step 2: Run installer tests and verify RED**
 
 ```powershell
 npm test -- tests/installer/claude-skill.test.ts tests/installer/setup.test.ts
@@ -436,7 +436,7 @@ npm test -- tests/installer/claude-skill.test.ts tests/installer/setup.test.ts
 
 Expected: missing skill/snapshot modules and missing setup dependency injection.
 
-- [ ] **Step 3: Implement atomic owned-skill lifecycle**
+- [x] **Step 3: Implement atomic owned-skill lifecycle**
 
 Use `.claude/skills/noutify/SKILL.md`, a v1 exact template and one exact legacy v0 template. `preflightClaudeSkill` accepts absent/current/v0 only. Write atomically through a sibling UUID temp file. Uninstall removes current or v0 exact content only; modified or unrelated content is preserved.
 
@@ -468,11 +468,11 @@ When restoring an absent skill file, remove any now-empty Noutify-owned skill
 directories created by the failed attempt, but never remove `.claude`, `skills`, or
 directories containing unrelated files.
 
-- [ ] **Step 4: Extend doctor and uninstall without breaking return contracts**
+- [x] **Step 4: Extend doctor and uninstall without breaking return contracts**
 
 Add a `claude-skill` doctor check requiring the exact current skill. `uninstallProject` removes both recognized hook and skill and returns `changed: true` if either changed while preserving `configPreserved: true`. Update exact tests to five doctor checks and verify unrelated skills survive.
 
-- [ ] **Step 5: Run installer, CLI and full regression tests GREEN**
+- [x] **Step 5: Run installer, CLI and full regression tests GREEN**
 
 ```powershell
 npm test -- tests/installer tests/cli.test.ts
@@ -483,7 +483,7 @@ npm run build
 
 Expected: skill lifecycle and rollback pass; all earlier hooks/config behavior remains green.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```powershell
 git add -- src/installer tests/installer tests/cli.test.ts
@@ -504,7 +504,7 @@ git commit -m "feat: install the Noutify Claude skill safely"
 - Consumes: CLI `setup --language <canonical> --format json` from Task 3.
 - Produces: `parseArguments(argv)` and `runInstall(argv, dependencies)` exports for tests plus direct Node execution.
 
-- [ ] **Step 1: Write failing JavaScript installer tests**
+- [x] **Step 1: Write failing JavaScript installer tests**
 
 Create `tests/scripts/install.test.mjs` importing the script module. Inject a runner that records commands. Assert a Spanish happy path runs, in order:
 
@@ -518,7 +518,7 @@ node <cli> setup --project <target> --language es --format json
 
 Assert verbose child success output is absent and the final CLI JSON line is forwarded. Add tests for Node below 24, unsupported language, a failing test stage with captured diagnostics, no later stage after failure, automatic target as the parent of Noutify, and advanced `--project` override.
 
-- [ ] **Step 2: Run the script test and verify RED**
+- [x] **Step 2: Run the script test and verify RED**
 
 ```powershell
 npm test -- tests/scripts/install.test.mjs
@@ -526,7 +526,7 @@ npm test -- tests/scripts/install.test.mjs
 
 Expected: module-not-found failure for `scripts/install.mjs`.
 
-- [ ] **Step 3: Implement the compact installer**
+- [x] **Step 3: Implement the compact installer**
 
 Export pure argument parsing and an async runner. Production dependencies use `process.platform`, `process.versions.node`, `spawnSync`, `process.stdout` and `process.stderr`. Resolve Noutify from `import.meta.url`, then default target to its parent.
 
@@ -538,7 +538,7 @@ Each captured stage result has:
 
 On success, write only `PASS <stage>` and the final JSON setup record. On failure, write `FAIL <stage> (exit <code>)`, captured stdout/stderr and `See Noutify/docs/setup-troubleshooting.md`, then return 1. Never execute setup if a preparation stage fails.
 
-- [ ] **Step 4: Run script, full tests and build GREEN**
+- [x] **Step 4: Run script, full tests and build GREEN**
 
 ```powershell
 npm test -- tests/scripts/install.test.mjs
@@ -549,7 +549,7 @@ npm run build
 
 Expected: compact output assertions and all regressions pass.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```powershell
 git add -- scripts/install.mjs tests/scripts/install.test.mjs package.json
@@ -574,7 +574,7 @@ If `package.json` did not change, omit it from `git add`.
 - Consumes: compact installer command, structured output, localized notifications and `/noutify` skill.
 - Produces: happy-path contract within 350 words/2,500 characters and conditional troubleshooting reference.
 
-- [ ] **Step 1: Write failing documentation-budget tests**
+- [x] **Step 1: Write failing documentation-budget tests**
 
 Add assertions that normalize CRLF, count words with `trim().split(/\s+/)`, and require:
 
@@ -590,7 +590,7 @@ expect(setup).toContain("/noutify language español");
 
 Require README/context to mention `Noutify-[12 easy characters]`, Spanish/English notifications, and `/noutify language`. Require the troubleshooting file to contain prerequisites, setup recovery, existing installation, topic recovery, skill collision and uninstall sections.
 
-- [ ] **Step 2: Run docs tests and verify RED**
+- [x] **Step 2: Run docs tests and verify RED**
 
 ```powershell
 npm test -- tests/docs/agent-installation.test.ts
@@ -598,7 +598,7 @@ npm test -- tests/docs/agent-installation.test.ts
 
 Expected: SETUP exceeds both budgets and required new files/content are absent.
 
-- [ ] **Step 3: Rewrite the happy path and create conditional reference**
+- [x] **Step 3: Rewrite the happy path and create conditional reference**
 
 Keep `SETUP.md` to these compact sections only:
 
@@ -616,7 +616,7 @@ Instruct Claude to choose `es` for Spanish interaction and `en` for English, run
 
 Move expanded operational detail to `docs/setup-troubleshooting.md`. Update README and master context without returning manual path variables to the primary flow.
 
-- [ ] **Step 4: Run docs budgets and complete verification GREEN**
+- [x] **Step 4: Run docs budgets and complete verification GREEN**
 
 ```powershell
 npm test -- tests/docs/agent-installation.test.ts
@@ -629,7 +629,7 @@ git diff --check
 
 Expected: budgets pass, all tests pass, build/typecheck succeed, audit has zero high vulnerabilities and diff is clean.
 
-- [ ] **Step 5: Commit Task 6**
+- [x] **Step 5: Commit Task 6**
 
 ```powershell
 git add -- SETUP.md README.md NOUTIFY_CONTEXT.md docs/setup-troubleshooting.md tests/docs/agent-installation.test.ts
@@ -649,11 +649,11 @@ git commit -m "docs: compact localized Noutify onboarding"
 - Consumes: all completed tasks.
 - Produces: fresh nested-layout evidence and updated remote PR branch.
 
-- [ ] **Step 1: Build a disposable tracked-source nested layout**
+- [x] **Step 1: Build a disposable tracked-source nested layout**
 
 Archive `HEAD` into `work/friendly-localized-smoke/TargetProject/Noutify/`, excluding `.git`, dependencies, build output and private configuration. Verify `SETUP.md`, `scripts/install.mjs`, `package-lock.json` and `src/cli.ts` exist.
 
-- [ ] **Step 2: Run compact Spanish installation without printing the topic**
+- [x] **Step 2: Run compact Spanish installation without printing the topic**
 
 From `TargetProject/`, capture rather than display:
 
@@ -663,7 +663,7 @@ $installOutput = & node Noutify/scripts/install.mjs --language es 2>&1
 
 Assert exit 0, parse the final JSON internally, require a `created` status, `language=es`, default server and topic regex. Do not emit the captured topic in tool output or reports.
 
-- [ ] **Step 3: Verify installed state and localized sends with a local test harness**
+- [x] **Step 3: Verify installed state and localized sends with a local test harness**
 
 Without contacting ntfy, run an inline Node ESM harness from `TargetProject/`.
 Import `readProjectConfig` from `./Noutify/dist/config/project-config.js`,
@@ -678,7 +678,7 @@ Import `readProjectConfig` from `./Noutify/dist/config/project-config.js`,
 
 Invoke the CLI language command with `english`, assert the topic and confirmation fields are unchanged, and verify the injected waiting notification becomes English.
 
-- [ ] **Step 4: Run final repository gates after moving the smoke copy outside test discovery**
+- [x] **Step 4: Run final repository gates after moving the smoke copy outside test discovery**
 
 ```powershell
 npm test
@@ -691,7 +691,7 @@ git status -sb
 
 Expected: all tests pass once, compilation succeeds, zero high vulnerabilities, no whitespace errors and only the plan execution record is modified.
 
-- [ ] **Step 5: Run secret and artifact hygiene scans**
+- [x] **Step 5: Run secret and artifact hygiene scans**
 
 Confirm Git tracks no `.noutify.local.json`, `node_modules`, `dist`, `work` or real ntfy topic URL. Inspect `git diff origin/agent/agent-guided-installation...HEAD` and require only approved implementation, tests, docs, spec and plan files.
 
