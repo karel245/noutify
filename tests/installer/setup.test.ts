@@ -16,6 +16,7 @@ import {
 import { hasClaudeSkill } from "../../src/installer/claude-skill.js";
 import {
   buildClaudeHookCommand,
+  buildLegacyClaudeHookCommand,
   confirmProject,
   doctorProject,
   setProjectLanguage,
@@ -76,7 +77,7 @@ describe("Phase 0 setup lifecycle", () => {
       join(root, ".claude", "settings.local.json"),
       "utf8",
     );
-    expect(settingsText.match(/hook claude-stop/g)).toHaveLength(1);
+    expect(settingsText.match(/claude-stop/g)).toHaveLength(1);
 
     const sent: Notification[] = [];
     const configured = await readProjectConfig(root);
@@ -160,6 +161,44 @@ describe("Phase 0 setup lifecycle", () => {
     ).toMatchObject({ ok: false, message: "expected one Noutify Stop hook; found 2" });
   });
 
+  it("fails doctor when only the legacy shell-form hook remains", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      ...runtime,
+    });
+    await confirmProject(root);
+    const settingsPath = join(root, ".claude", "settings.local.json");
+    const value = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      hooks: { Stop: Array<{ hooks: unknown[] }> };
+    };
+    value.hooks.Stop[0] = {
+      hooks: [
+        {
+          type: "command",
+          command: buildLegacyClaudeHookCommand(root, runtime),
+          timeout: 12,
+        },
+      ],
+    };
+    await writeFile(settingsPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+
+    const result = await doctorProject(root, runtime);
+
+    expect(result.ok).toBe(false);
+    expect(
+      result.checks.find((check) => check.name === "claude-stop-hook"),
+    ).toMatchObject({
+      ok: false,
+      message: "expected one current Noutify Stop hook; found 1 legacy",
+    });
+  });
+
   it("fails doctor when the Noutify skill is modified", async () => {
     const root = await temporaryProject();
     const runtime = {
@@ -174,7 +213,7 @@ describe("Phase 0 setup lifecycle", () => {
     await confirmProject(root);
     await writeFile(
       join(root, ".claude", "skills", "noutify", "SKILL.md"),
-      "<!-- noutify-managed:v1 -->\nmodified\n",
+      "<!-- noutify-managed:v2 -->\nmodified\n",
       "utf8",
     );
 
@@ -234,6 +273,7 @@ describe("Phase 0 setup lifecycle", () => {
     const publicPath = join(root, "noutify.config.json");
     const privatePath = join(root, ".noutify.local.json");
     const skillPath = join(root, ".claude", "skills", "noutify", "SKILL.md");
+    const launcherPath = join(root, ".claude", "skills", "noutify", "launcher.mjs");
     const noutifySkillDirectory = join(root, ".claude", "skills", "noutify");
     const otherSkill = join(root, ".claude", "skills", "other", "SKILL.md");
     const originalIgnore = "dist/\n";
@@ -255,6 +295,7 @@ describe("Phase 0 setup lifecycle", () => {
           installSkill: async () => {
             await mkdir(noutifySkillDirectory, { recursive: true });
             await writeFile(skillPath, "partial skill\n", "utf8");
+            await writeFile(launcherPath, "partial launcher\n", "utf8");
             throw new Error("skill write failed");
           },
         },
@@ -266,6 +307,7 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(access(publicPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(privatePath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(launcherPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(noutifySkillDirectory)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -281,6 +323,7 @@ describe("Phase 0 setup lifecycle", () => {
     };
     const skillDirectory = join(root, ".claude", "skills", "noutify");
     const skillPath = join(skillDirectory, "SKILL.md");
+    const launcherPath = join(skillDirectory, "launcher.mjs");
     await mkdir(skillDirectory, { recursive: true });
 
     await expect(
@@ -293,6 +336,7 @@ describe("Phase 0 setup lifecycle", () => {
         {
           installSkill: async () => {
             await writeFile(skillPath, "partial skill\n", "utf8");
+            await writeFile(launcherPath, "partial launcher\n", "utf8");
             throw new Error("skill write failed");
           },
         },
@@ -301,5 +345,37 @@ describe("Phase 0 setup lifecycle", () => {
 
     await expect(access(skillDirectory)).resolves.toBeUndefined();
     await expect(access(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(launcherPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each([
+    ["nodePath", { nodePath: "node", cliPath: "C:/noutify/dist/cli.js" }],
+    ["cliPath", { nodePath: "C:/node.exe", cliPath: "dist/cli.js" }],
+  ] as const)(
+    "rejects a non-absolute runtime %s before mutating the target",
+    async (field, runtime) => {
+      const root = await temporaryProject();
+      const ignorePath = join(root, ".gitignore");
+      await writeFile(ignorePath, "dist/\n", "utf8");
+
+      await expect(
+        setupProject({
+          projectRoot: root,
+          topic: "private_topic_1234567890",
+          ...runtime,
+        }),
+      ).rejects.toThrow(`runtime ${field} must be absolute`);
+
+      await expect(readFile(ignorePath, "utf8")).resolves.toBe("dist/\n");
+      await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(access(join(root, ".noutify.local.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(access(join(root, ".claude", "settings.local.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 });

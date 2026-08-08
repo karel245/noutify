@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export interface ClaudeSkillRuntime {
   nodePath: string;
@@ -12,6 +13,12 @@ export interface ClaudeSkillResult {
 }
 
 const SKILL_RELATIVE_PATH = join(".claude", "skills", "noutify", "SKILL.md");
+const LAUNCHER_RELATIVE_PATH = join(
+  ".claude",
+  "skills",
+  "noutify",
+  "launcher.mjs",
+);
 
 function quoteArgument(value: string): string {
   return `"${value.replaceAll('"', '\\"')}"`;
@@ -26,23 +33,32 @@ function isMissingFile(error: unknown): error is { code: "ENOENT" } {
   );
 }
 
-function skillPath(projectRoot: string): string {
-  return join(resolve(projectRoot), SKILL_RELATIVE_PATH);
+function ownedPath(projectRoot: string, relativePath: string): string {
+  return join(resolve(projectRoot), relativePath);
 }
 
-function buildClaudeSkillVersion(
+function validateRuntime(runtime: ClaudeSkillRuntime): void {
+  if (!isAbsolute(runtime.nodePath)) {
+    throw new Error("runtime nodePath must be absolute");
+  }
+  if (!isAbsolute(runtime.cliPath)) {
+    throw new Error("runtime cliPath must be absolute");
+  }
+}
+
+function buildLegacyClaudeSkill(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
   version: "v0" | "v1",
 ): string {
   const command = (language: "en" | "es") => [
-      quoteArgument(runtime.nodePath),
-      quoteArgument(runtime.cliPath),
-      "language",
-      quoteArgument(language),
-      "--project",
-      quoteArgument(resolve(projectRoot)),
-    ].join(" ");
+    quoteArgument(runtime.nodePath),
+    quoteArgument(runtime.cliPath),
+    "language",
+    quoteArgument(language),
+    "--project",
+    quoteArgument(resolve(projectRoot)),
+  ].join(" ");
   return `<!-- noutify-managed:${version} -->
 ---
 name: noutify
@@ -62,13 +78,62 @@ Use \`$ARGUMENTS\` only for \`language <language>\`.
 }
 
 export function buildClaudeSkill(
-  projectRoot: string,
-  runtime: ClaudeSkillRuntime,
+  _projectRoot: string,
+  _runtime: ClaudeSkillRuntime,
 ): string {
-  return buildClaudeSkillVersion(projectRoot, runtime, "v1");
+  return `---
+name: noutify
+description: Configure Noutify for this project.
+argument-hint: language <english|español>
+disable-model-invocation: true
+---
+<!-- noutify-managed:v2 -->
+
+Use \`$ARGUMENTS\` only as text for \`language <language>\`.
+
+1. Accept exactly two arguments whose first value is \`language\`; otherwise show \`/noutify language <english|español>\` and stop.
+2. Accept the second argument case- and accent-insensitively only as \`es\`, \`spanish\`, \`español\`, \`espanol\`, or \`castellano\` and map it to the literal \`es\`; or case- and accent-insensitively only as \`en\`, \`english\`, \`inglés\`, or \`ingles\` and map it to the literal \`en\`.
+3. Unsupported or shell-active values must show \`/noutify language <english|español>\` and stop before execution.
+4. From the project root, run exactly one fixed command after mapping: Spanish \`node .claude/skills/noutify/launcher.mjs es\`; English \`node .claude/skills/noutify/launcher.mjs en\`. Do not run another Noutify subcommand.
+5. Never put \`$ARGUMENTS\`, user input, an absolute project path, command substitutions, backticks, pipes, or redirects in a command.
+6. Report the command result. Never read or print \`.noutify.local.json\` or its topic.
+`;
 }
 
-async function readSkill(path: string): Promise<string | null> {
+function buildClaudeLauncher(runtime: ClaudeSkillRuntime): string {
+  const cliUrl = pathToFileURL(resolve(runtime.cliPath)).href;
+  return `// noutify-managed:v2
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const language = process.argv.length === 3 ? process.argv[2] : "";
+if (language !== "en" && language !== "es") {
+  process.stderr.write("language must be en or es\\n");
+  process.exitCode = 1;
+} else {
+  const launcherDirectory = dirname(fileURLToPath(import.meta.url));
+  const projectRoot = resolve(launcherDirectory, "..", "..", "..");
+  const cliPath = fileURLToPath(${JSON.stringify(cliUrl)});
+  const result = spawnSync(
+    process.execPath,
+    [cliPath, "language", language, "--project", projectRoot],
+    { stdio: "inherit", shell: false, windowsHide: true },
+  );
+  if (result.error) {
+    process.stderr.write(\`Noutify launcher failed: \${result.error.message}\\n\`);
+    process.exitCode = 1;
+  } else if (result.signal) {
+    process.stderr.write(\`Noutify launcher terminated by signal \${result.signal}\\n\`);
+    process.exitCode = 1;
+  } else {
+    process.exitCode = result.status ?? 1;
+  }
+}
+`;
+}
+
+async function readOwnedFile(path: string): Promise<string | null> {
   try {
     return await readFile(path, "utf8");
   } catch (error) {
@@ -83,12 +148,13 @@ function isRecognizedSkill(
   runtime: ClaudeSkillRuntime,
 ): boolean {
   return (
-    contents === buildClaudeSkillVersion(projectRoot, runtime, "v1") ||
-    contents === buildClaudeSkillVersion(projectRoot, runtime, "v0")
+    contents === buildClaudeSkill(projectRoot, runtime) ||
+    contents === buildLegacyClaudeSkill(projectRoot, runtime, "v1") ||
+    contents === buildLegacyClaudeSkill(projectRoot, runtime, "v0")
   );
 }
 
-async function writeSkillAtomic(path: string, contents: string): Promise<void> {
+async function writeOwnedFileAtomic(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
@@ -105,35 +171,56 @@ export async function preflightClaudeSkill(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
 ): Promise<void> {
-  const contents = await readSkill(skillPath(projectRoot));
-  if (contents === null || isRecognizedSkill(contents, projectRoot, runtime)) {
-    return;
+  validateRuntime(runtime);
+  const [skill, launcher] = await Promise.all([
+    readOwnedFile(ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
+    readOwnedFile(ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
+  ]);
+  if (skill !== null && !isRecognizedSkill(skill, projectRoot, runtime)) {
+    throw new Error("Noutify Claude skill path is already occupied");
   }
-  throw new Error("Noutify Claude skill path is already occupied");
+  if (launcher !== null && launcher !== buildClaudeLauncher(runtime)) {
+    throw new Error("Noutify Claude launcher path is already occupied");
+  }
 }
 
 export async function hasClaudeSkill(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
 ): Promise<boolean> {
-  const contents = await readSkill(skillPath(projectRoot));
-  return contents === buildClaudeSkill(projectRoot, runtime);
+  validateRuntime(runtime);
+  const [skill, launcher] = await Promise.all([
+    readOwnedFile(ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
+    readOwnedFile(ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
+  ]);
+  return (
+    skill === buildClaudeSkill(projectRoot, runtime) &&
+    launcher === buildClaudeLauncher(runtime)
+  );
 }
 
 export async function installClaudeSkill(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
 ): Promise<ClaudeSkillResult> {
-  const path = skillPath(projectRoot);
-  const contents = await readSkill(path);
-  const current = buildClaudeSkill(projectRoot, runtime);
-  if (contents === current) {
+  await preflightClaudeSkill(projectRoot, runtime);
+  const skillFile = ownedPath(projectRoot, SKILL_RELATIVE_PATH);
+  const launcherFile = ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH);
+  const currentSkill = buildClaudeSkill(projectRoot, runtime);
+  const currentLauncher = buildClaudeLauncher(runtime);
+  const [skill, launcher] = await Promise.all([
+    readOwnedFile(skillFile),
+    readOwnedFile(launcherFile),
+  ]);
+  if (skill === currentSkill && launcher === currentLauncher) {
     return { changed: false };
   }
-  if (contents !== null && !isRecognizedSkill(contents, projectRoot, runtime)) {
-    throw new Error("Noutify Claude skill path is already occupied");
+  if (skill !== currentSkill) {
+    await writeOwnedFileAtomic(skillFile, currentSkill);
   }
-  await writeSkillAtomic(path, current);
+  if (launcher !== currentLauncher) {
+    await writeOwnedFileAtomic(launcherFile, currentLauncher);
+  }
   return { changed: true };
 }
 
@@ -141,31 +228,43 @@ export async function uninstallClaudeSkill(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
 ): Promise<ClaudeSkillResult> {
-  const path = skillPath(projectRoot);
-  const contents = await readSkill(path);
-  if (
-    contents === null ||
-    !isRecognizedSkill(contents, projectRoot, runtime)
-  ) {
-    return { changed: false };
+  validateRuntime(runtime);
+  const skillFile = ownedPath(projectRoot, SKILL_RELATIVE_PATH);
+  const launcherFile = ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH);
+  const [skill, launcher] = await Promise.all([
+    readOwnedFile(skillFile),
+    readOwnedFile(launcherFile),
+  ]);
+  let changed = false;
+  if (skill !== null && isRecognizedSkill(skill, projectRoot, runtime)) {
+    await unlink(skillFile);
+    changed = true;
   }
-  await unlink(path);
-  return { changed: true };
+  if (launcher === buildClaudeLauncher(runtime)) {
+    await unlink(launcherFile);
+    changed = true;
+  }
+  if (changed) {
+    await removeEmptyClaudeSkillDirectory(projectRoot);
+  }
+  return { changed };
 }
 
 export async function removeEmptyClaudeSkillDirectory(
   projectRoot: string,
 ): Promise<void> {
-  await rmdir(dirname(skillPath(projectRoot))).catch((error: unknown) => {
-    if (
-      isMissingFile(error) ||
-      (typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ENOTEMPTY")
-    ) {
-      return;
-    }
-    throw error;
-  });
+  await rmdir(dirname(ownedPath(projectRoot, SKILL_RELATIVE_PATH))).catch(
+    (error: unknown) => {
+      if (
+        isMissingFile(error) ||
+        (typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOTEMPTY")
+      ) {
+        return;
+      }
+      throw error;
+    },
+  );
 }

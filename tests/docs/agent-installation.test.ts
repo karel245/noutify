@@ -48,7 +48,9 @@ describe("agent-guided installation documentation", () => {
     expect(setupContract).toContain("use English notifications");
     expect(setupContract).toContain("Spanish to `es`");
     expect(setupContract).toContain("English to `en`");
-    expect(setupContract).toContain("may explain in the interaction language");
+    expect(setupContract).toContain(
+      "tell the user in the interaction language that notifications will use English",
+    );
     for (const document of [readme, context]) {
       const normalizedDocument = normalizeWhitespace(document);
       expect(normalizedDocument).toContain("conversation language");
@@ -65,11 +67,17 @@ describe("agent-guided installation documentation", () => {
     expect(setupContract).toContain(
       "Never repeat the topic after that display in chat, logs, summaries, commits, docs, issues, diagnostics, artifacts, or generated files.",
     );
+    expect(setupContract).toContain(
+      "tell the user in the interaction language that it is private because it functions as the notification key",
+    );
     expect(setup).toContain("subscription is ready");
     expect(setup).toContain("explicit receipt");
     expect(setup).toContain("dist/cli.js test");
     expect(setup).toContain("dist/cli.js confirm");
     expect(setup).toContain("dist/cli.js doctor");
+    expect(setupContract).toContain(
+      "Automatic Stop-hook phone acceptance remains pending until the owner observes a real Stop notification.",
+    );
   });
 
   it("keeps preparation stages in recovery documentation, not the compact setup", async () => {
@@ -126,6 +134,12 @@ describe("agent-guided installation documentation", () => {
       expect(normalizedDocument).toContain("Noutify-[12 easy characters]");
       expect(normalizedDocument).toContain("Spanish and English notifications");
       expect(normalizedDocument).toContain("/noutify language");
+      expect(normalizedDocument).toContain("deterministic notification catalog");
+      expect(normalizedDocument).toContain('"language": "es"');
+      expect(normalizedDocument).toContain("--language LANGUAGE");
+      expect(normalizedDocument).toContain("--format json");
+      expect(normalizedDocument).toContain("launcher.mjs");
+      expect(normalizedDocument).toContain("exact Noutify-owned Stop hook and skill files");
     }
   });
 
@@ -139,9 +153,28 @@ describe("agent-guided installation documentation", () => {
     expect(readme).toContain("nested Git repository");
     expect(readme).toContain("Do not move or delete `Noutify/`");
     expect(readme).toContain("Install Noutify following Noutify/SETUP.md.");
+    expect(readme).toContain("settings.local.json.noutify-backup");
+    expect(readme).toContain("Noutify/docs/setup-troubleshooting.md#uninstall");
+    expect(normalizeWhitespace(readme)).toContain(
+      "uninstall while the original path is still available, move `Noutify/`, then run setup again",
+    );
     expect(context).toContain("project-local agent-guided installation");
     expect(context).toContain("Install Noutify following Noutify/SETUP.md.");
     expect(context).toContain("conversation language");
     expect(context).toContain("OS UI locale");
+  });
+
+  it("documents safe recovery when Noutify has moved", async () => {
+    const troubleshooting = normalizeWhitespace(
+      await readRepositoryFile("docs/setup-troubleshooting.md"),
+    );
+
+    expect(troubleshooting).toContain(
+      "uninstall while the original Noutify path still exists, move the folder, then run setup again",
+    );
+    expect(troubleshooting).toContain(
+      "If the folder was already moved, restore its old path first",
+    );
+    expect(troubleshooting).not.toContain("move the folder and rerun setup");
   });
 });

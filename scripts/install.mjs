@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -40,6 +40,7 @@ export function runProductionCommand(command, argumentsList, options, runtime = 
 function defaultDependencies() {
   return {
     platform: process.platform,
+    nodePath: process.execPath,
     nodeVersion: process.versions.node,
     noutifyRoot: defaultRoot(),
     isFile: (path) => {
@@ -90,9 +91,42 @@ function sourceIsValid(root, isFile) {
 
 function isSetupRecord(value, requestedLanguage) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  if (value.language !== requestedLanguage || !isHttpServer(value.server)) return false;
-  if (value.status === "existing") return !Object.hasOwn(value, "topic");
-  return value.status === "created" && typeof value.topic === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(value.topic);
+  if (!isHttpServer(value.server)) return false;
+  if (value.status === "existing") {
+    return (
+      hasExactKeys(value, ["status", "language", "server"]) &&
+      supportedLanguages.has(value.language)
+    );
+  }
+  return (
+    value.status === "created" &&
+    hasExactKeys(value, ["status", "language", "server", "topic"]) &&
+    value.language === requestedLanguage &&
+    typeof value.topic === "string" &&
+    /^Noutify-[23456789abcdefghjkmnpqrstuvwxyz]{12}$/.test(value.topic)
+  );
+}
+
+function hasExactKeys(value, keys) {
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function sanitizeSetupRecord(value) {
+  return value.status === "created"
+    ? {
+        status: "created",
+        language: value.language,
+        server: value.server,
+        topic: value.topic,
+      }
+    : {
+        status: "existing",
+        language: value.language,
+        server: value.server,
+      };
 }
 
 function isHttpServer(value) {
@@ -105,13 +139,34 @@ function isHttpServer(value) {
   }
 }
 
-function runStage(dependencies, stage, command, argumentsList, cwd, writePass = true) {
+function processDiagnostics(result, includeChildOutput) {
+  let diagnostics = includeChildOutput
+    ? `${result.stdout ?? ""}${result.stderr ?? ""}`
+    : "";
+  if (result.error && typeof result.error.message === "string") {
+    diagnostics += `launch error: ${result.error.message}\n`;
+  }
+  if (typeof result.signal === "string" && result.signal) {
+    diagnostics += `terminated by signal ${result.signal}\n`;
+  }
+  return diagnostics;
+}
+
+function runStage(
+  dependencies,
+  stage,
+  command,
+  argumentsList,
+  cwd,
+  writePass = true,
+  includeChildDiagnostics = true,
+) {
   const result = dependencies.run(command, argumentsList, { cwd });
   if (result.status !== 0) {
     return {
       ok: false,
       exitCode: result.status ?? 1,
-      diagnostics: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+      diagnostics: processDiagnostics(result, includeChildDiagnostics),
     };
   }
   if (writePass) dependencies.writeStdout(`PASS ${stage}\n`);
@@ -145,6 +200,9 @@ export async function runInstall(argv, suppliedDependencies = {}) {
   if (!sourceIsValid(dependencies.noutifyRoot, dependencies.isFile)) {
     return writeFailure(dependencies, "prerequisites", 1, "Noutify source files are incomplete.");
   }
+  if (!isAbsolute(dependencies.nodePath) || !dependencies.isFile(dependencies.nodePath)) {
+    return writeFailure(dependencies, "prerequisites", 1, "The current Node.js executable is invalid.");
+  }
   if (!supportedLanguages.has(parsed.language)) {
     return writeFailure(dependencies, "arguments", 1, `unsupported language: ${parsed.language ?? ""}`);
   }
@@ -158,7 +216,7 @@ export async function runInstall(argv, suppliedDependencies = {}) {
     ["build", "npm.cmd", ["run", "build"]],
     [
       "setup",
-      "node",
+      dependencies.nodePath,
       [cliPath, "setup", "--project", target, "--language", parsed.language, "--format", "json"],
     ],
   ];
@@ -171,19 +229,23 @@ export async function runInstall(argv, suppliedDependencies = {}) {
       argumentsList,
       dependencies.noutifyRoot,
       stage !== "setup",
+      stage !== "setup",
     );
     if (!result.ok) {
       return writeFailure(dependencies, stage, result.exitCode, result.diagnostics);
     }
     if (stage === "setup") {
       const finalLine = result.stdout.trim().split(/\r?\n/).at(-1);
+      let record;
       try {
-        if (!isSetupRecord(JSON.parse(finalLine), parsed.language)) throw new Error("invalid setup record");
+        const parsedRecord = JSON.parse(finalLine);
+        if (!isSetupRecord(parsedRecord, parsed.language)) throw new Error("invalid setup record");
+        record = sanitizeSetupRecord(parsedRecord);
       } catch {
-        return writeFailure(dependencies, "setup", 1, result.diagnostics);
+        return writeFailure(dependencies, "setup", 1, "invalid setup record");
       }
       dependencies.writeStdout("PASS setup\n");
-      dependencies.writeStdout(`${finalLine}\n`);
+      dependencies.writeStdout(`${JSON.stringify(record)}\n`);
     }
   }
   return 0;

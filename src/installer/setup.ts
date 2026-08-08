@@ -1,5 +1,5 @@
 import { access, readFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
 import {
   PRIVATE_CONFIG_FILE,
@@ -21,6 +21,7 @@ import {
   sendNtfy,
 } from "../providers/ntfy.js";
 import {
+  type ClaudeHookCommand,
   countClaudeStopHooks,
   installClaudeStopHook,
   uninstallClaudeStopHook,
@@ -56,7 +57,7 @@ export interface SetupProjectResult {
   topic: string;
   language: NotificationLanguage;
   server: string;
-  hookCommand: string;
+  hookCommand: ClaudeHookCommand;
 }
 
 export interface SetupDependencies {
@@ -91,7 +92,25 @@ function quoteArgument(value: string): string {
 export function buildClaudeHookCommand(
   projectRoot: string,
   runtime: RuntimePaths,
+): ClaudeHookCommand {
+  validateRuntimePaths(runtime);
+  return {
+    command: runtime.nodePath,
+    args: [
+      runtime.cliPath,
+      "hook",
+      "claude-stop",
+      "--project",
+      resolve(projectRoot),
+    ],
+  };
+}
+
+export function buildLegacyClaudeHookCommand(
+  projectRoot: string,
+  runtime: RuntimePaths,
 ): string {
+  validateRuntimePaths(runtime);
   return [
     quoteArgument(runtime.nodePath),
     quoteArgument(runtime.cliPath),
@@ -100,6 +119,15 @@ export function buildClaudeHookCommand(
     "--project",
     quoteArgument(resolve(projectRoot)),
   ].join(" ");
+}
+
+function validateRuntimePaths(runtime: RuntimePaths): void {
+  if (!isAbsolute(runtime.nodePath)) {
+    throw new Error("runtime nodePath must be absolute");
+  }
+  if (!isAbsolute(runtime.cliPath)) {
+    throw new Error("runtime cliPath must be absolute");
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -116,12 +144,15 @@ export async function setupProject(
   dependencies: SetupDependencies = {},
 ): Promise<SetupProjectResult> {
   const projectRoot = resolve(input.projectRoot);
+  const hookCommand = buildClaudeHookCommand(projectRoot, input);
+  const legacyHookCommand = buildLegacyClaudeHookCommand(projectRoot, input);
   await preflightClaudeSkill(projectRoot, input);
   const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
   const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
   const settingsPath = join(projectRoot, ".claude", "settings.local.json");
   const skillDirectory = join(projectRoot, ".claude", "skills", "noutify");
   const skillPath = join(skillDirectory, "SKILL.md");
+  const launcherPath = join(skillDirectory, "launcher.mjs");
   const skillDirectoryExisted = await exists(skillDirectory);
   const snapshots = await snapshotFiles([
     join(projectRoot, ".gitignore"),
@@ -130,6 +161,7 @@ export async function setupProject(
     settingsPath,
     `${settingsPath}.noutify-backup`,
     skillPath,
+    launcherPath,
   ]);
   let created = false;
   let bundle;
@@ -159,8 +191,11 @@ export async function setupProject(
       created = true;
     }
 
-    const hookCommand = buildClaudeHookCommand(projectRoot, input);
-    const hook = await installClaudeStopHook(projectRoot, hookCommand);
+    const hook = await installClaudeStopHook(
+      projectRoot,
+      hookCommand,
+      [legacyHookCommand],
+    );
     const installSkill = dependencies.installSkill ?? installClaudeSkill;
     await installSkill(projectRoot, input);
     return {
@@ -221,6 +256,7 @@ export async function doctorProject(
 ): Promise<DoctorResult> {
   const root = resolve(projectRoot);
   const hookCommand = buildClaudeHookCommand(root, runtime);
+  const legacyHookCommand = buildLegacyClaudeHookCommand(root, runtime);
   const checks: DoctorCheck[] = [];
   let bundle;
 
@@ -250,13 +286,20 @@ export async function doctorProject(
       : "private configuration is not ignored by Git",
   });
 
-  const hookCount = await countClaudeStopHooks(root, hookCommand).catch(() => 0);
+  const [currentHookCount, ownedHookCount] = await Promise.all([
+    countClaudeStopHooks(root, hookCommand),
+    countClaudeStopHooks(root, hookCommand, [legacyHookCommand]),
+  ]).catch(() => [0, 0]);
+  const legacyHookCount = ownedHookCount - currentHookCount;
+  const hookInstalled = currentHookCount === 1 && legacyHookCount === 0;
   checks.push({
     name: "claude-stop-hook",
-    ok: hookCount === 1,
-    message: hookCount === 1
+    ok: hookInstalled,
+    message: hookInstalled
       ? "Claude Code Stop hook is installed"
-      : `expected one Noutify Stop hook; found ${hookCount}`,
+      : currentHookCount === 0 && legacyHookCount > 0
+        ? `expected one current Noutify Stop hook; found ${legacyHookCount} legacy`
+        : `expected one Noutify Stop hook; found ${ownedHookCount}`,
   });
 
   const skillInstalled = await hasClaudeSkill(root, runtime).catch(() => false);
@@ -286,8 +329,9 @@ export async function uninstallProject(
 ): Promise<{ changed: boolean; configPreserved: true }> {
   const root = resolve(projectRoot);
   const command = buildClaudeHookCommand(root, runtime);
+  const legacyCommand = buildLegacyClaudeHookCommand(root, runtime);
   const [hook, skill] = await Promise.all([
-    uninstallClaudeStopHook(root, command),
+    uninstallClaudeStopHook(root, command, [legacyCommand]),
     uninstallClaudeSkill(root, runtime),
   ]);
   return { changed: hook.changed || skill.changed, configPreserved: true };

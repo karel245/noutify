@@ -12,7 +12,9 @@ import {
 const noutifyRoot = join("workspace", "TargetProject", "Noutify");
 const targetRoot = dirname(noutifyRoot);
 const cliPath = join(noutifyRoot, "dist", "cli.js");
+const nodePath = "C:\\Program Files\\nodejs\\node.exe";
 const overrideRoot = join("workspace", "Elsewhere");
+const friendlyTopic = "Noutify-23456789abcd";
 const temporaryRoots = [];
 
 afterEach(async () => {
@@ -25,12 +27,12 @@ function successfulRunner(commands) {
     return {
       status: 0,
       stdout:
-        command === "node"
+        command === nodePath
           ? JSON.stringify({
               status: "created",
               language: argumentsList[argumentsList.indexOf("--language") + 1],
               server: "https://ntfy.sh",
-              topic: "Noutify-safe-topic",
+              topic: friendlyTopic,
             }) + "\n"
           : "verbose child output\n",
       stderr: "",
@@ -46,6 +48,7 @@ function createDependencies(overrides = {}) {
     output,
     dependencies: {
       platform: "win32",
+      nodePath,
       nodeVersion: "24.0.0",
       noutifyRoot,
       isFile: () => true,
@@ -116,11 +119,11 @@ describe("production process runner", () => {
     expect(result.stderr).toContain("unsafe command token");
   });
 
-  it("keeps node setup arguments out of cmd parsing", () => {
+  it("keeps setup arguments out of shell parsing", () => {
     const calls = [];
     const argumentsList = [cliPath, "setup", "--project", "C:\\Target & Notes"];
 
-    runProductionCommand("node", argumentsList, { cwd: noutifyRoot }, {
+    runProductionCommand(nodePath, argumentsList, { cwd: noutifyRoot }, {
       platform: "win32",
       comSpec: "cmd.exe",
       spawn: (command, receivedArguments, options) => {
@@ -131,7 +134,7 @@ describe("production process runner", () => {
 
     expect(calls).toEqual([
       {
-        command: "node",
+        command: nodePath,
         receivedArguments: argumentsList,
         options: { cwd: noutifyRoot, encoding: "utf8", windowsHide: true },
       },
@@ -140,7 +143,7 @@ describe("production process runner", () => {
 });
 
 describe("compact installer", () => {
-  it("runs Spanish preparation stages before final setup without child success output", async () => {
+  it("uses the validated Node executable for Spanish setup and emits a sanitized record", async () => {
     const fixture = createDependencies();
 
     const exitCode = await runInstall(["--language", "es"], fixture.dependencies);
@@ -152,7 +155,7 @@ describe("compact installer", () => {
       { command: "npm.cmd", argumentsList: ["run", "typecheck"], options: { cwd: noutifyRoot } },
       { command: "npm.cmd", argumentsList: ["run", "build"], options: { cwd: noutifyRoot } },
       {
-        command: "node",
+        command: nodePath,
         argumentsList: [
           cliPath,
           "setup",
@@ -172,10 +175,54 @@ describe("compact installer", () => {
       "PASS typecheck\n",
       "PASS build\n",
       "PASS setup\n",
-      '{"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n',
+      `{"status":"created","language":"es","server":"https://ntfy.sh","topic":"${friendlyTopic}"}\n`,
     ]);
     expect(fixture.output.stdout.join("")).not.toContain("verbose child output");
     expect(fixture.output.stderr).toEqual([]);
+  });
+
+  it("reconstructs an exact successful record instead of forwarding child formatting", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout: command === nodePath
+            ? `{ "topic": "${friendlyTopic}", "server": "https://ntfy.example", "language": "en", "status": "created" }\n`
+            : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(0);
+    expect(fixture.output.stdout.at(-1)).toBe(
+      `{"status":"created","language":"en","server":"https://ntfy.example","topic":"${friendlyTopic}"}\n`,
+    );
+  });
+
+  it("accepts a canonical stored language mismatch for an existing record", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout: command === nodePath
+            ? '{"server":"https://ntfy.sh","status":"existing","language":"es"}\n'
+            : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(0);
+    expect(fixture.output.stdout.at(-1)).toBe(
+      '{"status":"existing","language":"es","server":"https://ntfy.sh"}\n',
+    );
   });
 
   it("rejects Node versions below 24 before running any stage", async () => {
@@ -242,17 +289,33 @@ describe("compact installer", () => {
     ]);
   });
 
-  it("does not report setup passed when its successful process output lacks a setup record", async () => {
+  it("surfaces preparation launch errors and termination signals", async () => {
+    const launchFixture = createDependencies({
+      run: () => ({ status: null, stdout: "", stderr: "", error: new Error("spawn EACCES") }),
+    });
+
+    await expect(runInstall(["--language", "en"], launchFixture.dependencies)).resolves.toBe(1);
+    expect(launchFixture.output.stderr.join("")).toContain("launch error: spawn EACCES");
+
+    const signalFixture = createDependencies({
+      run: () => ({ status: null, signal: "SIGTERM", stdout: "", stderr: "" }),
+    });
+
+    await expect(runInstall(["--language", "en"], signalFixture.dependencies)).resolves.toBe(1);
+    expect(signalFixture.output.stderr.join("")).toContain("terminated by signal SIGTERM");
+  });
+
+  it("uses a generic topic-free explanation for an invalid setup record", async () => {
+    const privateValue = "unexpected-private-value";
     const fixture = createDependencies({
       run: (command, argumentsList, options) => {
         fixture.commands.push({ command, argumentsList, options });
         return {
           status: 0,
-          stdout:
-            command === "node"
-              ? '{"status":"created","language":"en","server":"","topic":""}\n'
-              : "",
-          stderr: command === "node" ? "setup warning\n" : "",
+          stdout: command === nodePath
+            ? `{"status":"created","language":"en","server":"","topic":"${privateValue}"}\n`
+            : "",
+          stderr: command === nodePath ? `setup warning ${privateValue}\n` : "",
         };
       },
     });
@@ -260,29 +323,26 @@ describe("compact installer", () => {
     const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
 
     expect(exitCode).toBe(1);
-    expect(fixture.output.stdout).toEqual([
-      "PASS dependencies\n",
-      "PASS tests\n",
-      "PASS typecheck\n",
-      "PASS build\n",
-    ]);
+    expect(fixture.output.stdout).not.toContain("PASS setup\n");
+    expect(fixture.output.stdout.join("")).not.toContain(privateValue);
+    expect(fixture.output.stderr.join("")).not.toContain(privateValue);
     expect(fixture.output.stderr).toEqual([
       "FAIL setup (exit 1)\n",
-      '{"status":"created","language":"en","server":"","topic":""}\nsetup warning\n',
+      "invalid setup record\n",
       "See Noutify/docs/setup-troubleshooting.md\n",
     ]);
   });
 
-  it("does not forward a topic from an existing setup record", async () => {
+  it("never emits an unexpected topic from an existing setup record", async () => {
+    const privateValue = "unexpected-private-value";
     const fixture = createDependencies({
       run: (command, argumentsList, options) => {
         fixture.commands.push({ command, argumentsList, options });
         return {
           status: 0,
-          stdout:
-            command === "node"
-              ? '{"status":"existing","language":"en","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n'
-              : "",
+          stdout: command === nodePath
+            ? `{"status":"existing","language":"en","server":"https://ntfy.sh","topic":"${privateValue}"}\n`
+            : "",
           stderr: "",
         };
       },
@@ -291,20 +351,42 @@ describe("compact installer", () => {
     const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
 
     expect(exitCode).toBe(1);
-    expect(fixture.output.stdout).not.toContain("PASS setup\n");
-    expect(fixture.output.stderr.join("")).toContain("Noutify-safe-topic");
+    expect(fixture.output.stdout.join("")).not.toContain(privateValue);
+    expect(fixture.output.stderr.join("")).not.toContain(privateValue);
+    expect(fixture.output.stderr.join("")).toContain("invalid setup record");
   });
 
-  it("rejects a setup record whose language differs from the requested language", async () => {
+  it("rejects extra created keys without emitting their values", async () => {
+    const privateValue = "unexpected-private-value";
     const fixture = createDependencies({
       run: (command, argumentsList, options) => {
         fixture.commands.push({ command, argumentsList, options });
         return {
           status: 0,
-          stdout:
-            command === "node"
-              ? '{"status":"created","language":"es","server":"https://ntfy.sh","topic":"Noutify-safe-topic"}\n'
-              : "",
+          stdout: command === nodePath
+            ? `{"status":"created","language":"en","server":"https://ntfy.sh","topic":"${friendlyTopic}","extra":"${privateValue}"}\n`
+            : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(fixture.output.stdout.join("")).not.toContain(privateValue);
+    expect(fixture.output.stderr.join("")).not.toContain(privateValue);
+  });
+
+  it("rejects a created record whose language differs without forwarding child output", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout: command === nodePath
+            ? `{"status":"created","language":"es","server":"https://ntfy.sh","topic":"${friendlyTopic}"}\n`
+            : "",
           stderr: "",
         };
       },
@@ -314,7 +396,38 @@ describe("compact installer", () => {
 
     expect(exitCode).toBe(1);
     expect(fixture.output.stdout).not.toContain("PASS setup\n");
-    expect(fixture.output.stderr.join("")).toContain('"language":"es"');
+    expect(fixture.output.stderr).toEqual([
+      "FAIL setup (exit 1)\n",
+      "invalid setup record\n",
+      "See Noutify/docs/setup-troubleshooting.md\n",
+    ]);
+  });
+
+  it("reports safe launch diagnostics for setup without echoing setup streams", async () => {
+    const privateValue = "unexpected-private-value";
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        if (command === nodePath) {
+          return {
+            status: null,
+            signal: "SIGTERM",
+            error: new Error("spawn failed"),
+            stdout: privateValue,
+            stderr: privateValue,
+          };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    const exitCode = await runInstall(["--language", "en"], fixture.dependencies);
+
+    expect(exitCode).toBe(1);
+    const diagnostics = fixture.output.stderr.join("");
+    expect(diagnostics).toContain("launch error: spawn failed");
+    expect(diagnostics).toContain("terminated by signal SIGTERM");
+    expect(diagnostics).not.toContain(privateValue);
   });
 
   it("uses an advanced project override only for the final setup stage", async () => {

@@ -36,13 +36,23 @@ do not invent or expose a replacement topic.
 
 ## Skill collision
 
-If `.claude/skills/noutify/SKILL.md` is occupied by unrecognized content, setup
-stops to protect it. Do not overwrite it. Ask the owner whether to preserve,
-rename, or remove that separate skill, then re-run setup. The Noutify-owned
-skill accepts `/noutify language español` and `/noutify language english`.
+If `.claude/skills/noutify/SKILL.md` or its `launcher.mjs` is occupied by
+unrecognized content, setup stops to protect it. Do not overwrite it. Ask the
+owner whether to preserve, rename, or remove that separate file, then re-run
+setup. The Noutify-owned skill accepts `/noutify language español` and
+`/noutify language english`.
+
+## Moving Noutify
+
+To relocate the runtime, uninstall while the original Noutify path still exists,
+move the folder, then run setup again. If the folder was already moved, restore
+its old path first, uninstall there, and only then move it and rerun setup. This
+strict sequence lets Noutify recognize only the exact paths it published and
+prevents an unrelated hook or skill from being removed.
 
 ## Uninstall
 
 Only on an explicit request, run `node Noutify/dist/cli.js uninstall` from the
-target root. It removes only recognized Noutify hooks and skills, preserving
-unrelated Claude configuration and Noutify configuration files.
+target root. It removes only the exact Noutify-owned Stop hook and skill files,
+including `SKILL.md` and `launcher.mjs`, while preserving unrelated Claude
+configuration and Noutify configuration files.

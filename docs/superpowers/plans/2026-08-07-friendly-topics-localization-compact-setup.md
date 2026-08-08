@@ -4,9 +4,15 @@
 
 **Goal:** Generate phone-friendly secure topics, localize test and waiting notifications in Spanish or English, add `/noutify language <language>`, and reduce the successful agent-guided setup to a compact installer and a 350-word contract.
 
-**Architecture:** Keep topic generation and language normalization in focused configuration modules, and route all notification text through a deterministic two-language catalog. Install one conservative Claude project skill for `/noutify`, orchestrate preparation through a plain Node.js bootstrap script, and make new setup transactional across configuration, hooks, and the owned skill.
+**Architecture:** Keep topic generation and language normalization in focused configuration modules, and route all notification text through a deterministic two-language catalog. Install one conservative Claude project skill plus its owned shell-free launcher for `/noutify`, use exec-form Stop hooks, orchestrate preparation through a plain Node.js bootstrap script, and make new setup transactional across configuration, hooks, and the owned skill files.
 
 **Tech Stack:** Node.js 24+, TypeScript 7, Vitest 4, Node ESM, Claude Code project skills, PowerShell-facing CLI commands, ntfy.
+
+**Approved final-review correction:** Official Claude compatibility supersedes the
+earlier marker-first design below. The shipped v2 skill starts with parsed YAML
+frontmatter, places its ownership marker after the delimiter, invokes a fixed
+relative owned launcher, and installs the Stop hook as `command` plus literal
+`args`. Exact published v0/v1 content is migration-only.
 
 ## Global Constraints
 
@@ -412,19 +418,25 @@ git commit -m "feat: add notification language command"
 
 - [x] **Step 1: Write failing skill ownership tests**
 
-Create tests for absent creation, exact idempotency, recognized `v0` upgrade, unrelated collision refusal, exact uninstall and preservation of other skill directories. Assert the generated file begins with:
+Create tests for absent creation, exact idempotency, exact published `v0`/`v1`
+upgrade, unrelated collision refusal, exact uninstall and preservation of other
+skill directories. Parse the generated file with a real frontmatter parser and
+assert it begins with:
 
 ```markdown
-<!-- noutify-managed:v1 -->
 ---
 name: noutify
 description: Configure Noutify for this project.
 argument-hint: language <english|español>
 disable-model-invocation: true
 ---
+<!-- noutify-managed:v2 -->
 ```
 
-Assert the body mentions `$ARGUMENTS`, permits only `language <language>`, and invokes the quoted absolute Node/CLI/project paths.
+Assert the body treats `$ARGUMENTS` only as text, permits only
+`language <language>`, and chooses a fixed relative launcher command. Execute
+the launcher across a real process boundary and verify it uses
+`spawnSync(process.execPath, args)` without a shell or interpolated paths.
 
 Add a setup rollback test with injected `installSkill` that throws after config and hook writes. Snapshot the initial `.gitignore`, settings and absence of configs/skill; assert all are restored byte-for-byte and no settings backup remains.
 
@@ -438,7 +450,11 @@ Expected: missing skill/snapshot modules and missing setup dependency injection.
 
 - [x] **Step 3: Implement atomic owned-skill lifecycle**
 
-Use `.claude/skills/noutify/SKILL.md`, a v1 exact template and one exact legacy v0 template. `preflightClaudeSkill` accepts absent/current/v0 only. Write atomically through a sibling UUID temp file. Uninstall removes current or v0 exact content only; modified or unrelated content is preserved.
+Use `.claude/skills/noutify/SKILL.md` and `launcher.mjs`, a v2 exact template,
+and exact migration templates for the currently published invalid v0/v1 skill.
+`preflightClaudeSkill` accepts absent/current/exact legacy content only. Write
+each file atomically through a sibling UUID temp file. Uninstall removes exact
+recognized content only; modified or unrelated content is preserved.
 
 Implement generic snapshots:
 
@@ -448,7 +464,12 @@ export async function snapshotFiles(paths: string[]): Promise<FileSnapshot[]>;
 export async function restoreFileSnapshots(snapshots: FileSnapshot[]): Promise<void>;
 ```
 
-Before target mutation, setup preflights the skill and snapshots `.gitignore`, both config files, Claude settings, Claude settings backup and the Noutify skill. Wrap configuration, hook and skill writes in one `try/catch`; restore every snapshot on failure. Inject only the skill installer through an optional second-parameter dependency for the rollback test.
+Before target mutation, setup validates absolute runtime paths, preflights both
+skill files and snapshots `.gitignore`, both config files, Claude settings,
+Claude settings backup, `SKILL.md` and `launcher.mjs`. Wrap configuration, hook
+and skill writes in one `try/catch`; restore every snapshot on failure. Inject
+only the skill installer through an optional second-parameter dependency for the
+rollback test.
 
 Use the narrow dependency boundary:
 
@@ -674,7 +695,8 @@ Import `readProjectConfig` from `./Noutify/dist/config/project-config.js`,
 2. calls `testProject` with an injected sender returning `{ ok: true, attempts: 1 }` and asserts `Noutify conectado`;
 3. calls `handleClaudeStop('{"stop_hook_active":false}', context)` with the stored language and an injected sender, then asserts `Agente en espera`;
 4. calls `doctorProject` with `process.execPath` and the resolved built CLI path and asserts only the `confirmed` check fails;
-5. verifies `.claude/settings.local.json` contains one hook and `.claude/skills/noutify/SKILL.md` begins with the v1 ownership marker.
+5. verifies `.claude/settings.local.json` contains one exec-form hook, the v2
+   skill frontmatter parses, and its owned launcher is present.
 
 Invoke the CLI language command with `english`, assert the topic and confirmation fields are unchanged, and verify the injected waiting notification becomes English.
 

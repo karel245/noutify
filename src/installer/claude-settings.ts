@@ -1,5 +1,5 @@
-import { constants, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { constants, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { CLAUDE_HOOK_TIMEOUT_MS } from "../core/runtime-policy.js";
@@ -10,6 +10,11 @@ interface SettingsReadResult {
   exists: boolean;
   path: string;
   value: Record<string, unknown>;
+}
+
+export interface ClaudeHookCommand {
+  command: string;
+  args: string[];
 }
 
 export interface HookInstallResult {
@@ -68,23 +73,92 @@ function stopEntries(settings: Record<string, unknown>): unknown[] {
   return settings.hooks.Stop;
 }
 
-function isOwnedCommand(value: unknown, command: string): boolean {
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   return (
-    isRecord(value) &&
-    value.type === "command" &&
-    value.command === command
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
   );
 }
 
-function entryContainsCommand(entry: unknown, command: string): boolean {
-  return entryCommandCount(entry, command) > 0;
+function arraysEqual(left: unknown[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
-function entryCommandCount(entry: unknown, command: string): number {
+function isCurrentHandler(value: unknown, hook: ClaudeHookCommand): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["type", "command", "args", "timeout"]) &&
+    value.type === "command" &&
+    value.command === hook.command &&
+    Array.isArray(value.args) &&
+    arraysEqual(value.args, hook.args) &&
+    value.timeout === CLAUDE_HOOK_TIMEOUT_MS / 1_000
+  );
+}
+
+function isLegacyHandler(value: unknown, command: string): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["type", "command", "timeout"]) &&
+    value.type === "command" &&
+    value.command === command &&
+    value.timeout === CLAUDE_HOOK_TIMEOUT_MS / 1_000
+  );
+}
+
+function isOwnedHandler(
+  value: unknown,
+  hook: ClaudeHookCommand,
+  legacyCommands: readonly string[],
+): boolean {
+  return (
+    isCurrentHandler(value, hook) ||
+    legacyCommands.some((command) => isLegacyHandler(value, command))
+  );
+}
+
+function entryCommandCount(entry: unknown, hook: ClaudeHookCommand): number {
   if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
     return 0;
   }
-  return entry.hooks.filter((hook) => isOwnedCommand(hook, command)).length;
+  return entry.hooks.filter((handler) => isCurrentHandler(handler, hook)).length;
+}
+
+function legacyCommandCount(entry: unknown, commands: readonly string[]): number {
+  if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
+    return 0;
+  }
+  return entry.hooks.filter((handler) =>
+    commands.some((command) => isLegacyHandler(handler, command)),
+  ).length;
+}
+
+function removeOwnedHandlers(
+  entries: unknown[],
+  hook: ClaudeHookCommand,
+  legacyCommands: readonly string[],
+): unknown[] {
+  return entries.flatMap((entry) => {
+    if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
+      return [entry];
+    }
+    const remainingHooks = entry.hooks.filter(
+      (handler) => !isOwnedHandler(handler, hook, legacyCommands),
+    );
+    return remainingHooks.length > 0 ? [{ ...entry, hooks: remainingHooks }] : [];
+  });
+}
+
+function currentHandler(hook: ClaudeHookCommand): Record<string, unknown> {
+  return {
+    type: "command",
+    command: hook.command,
+    args: [...hook.args],
+    timeout: CLAUDE_HOOK_TIMEOUT_MS / 1_000,
+  };
 }
 
 async function writeSettingsAtomic(
@@ -115,21 +189,25 @@ async function backupExistingSettings(path: string): Promise<string> {
 
 export async function hasClaudeStopHook(
   projectRoot: string,
-  command: string,
+  hook: ClaudeHookCommand,
 ): Promise<boolean> {
   const settings = await readSettings(projectRoot);
-  return stopEntries(settings.value).some((entry) =>
-    entryContainsCommand(entry, command),
+  return stopEntries(settings.value).some(
+    (entry) => entryCommandCount(entry, hook) > 0,
   );
 }
 
 export async function countClaudeStopHooks(
   projectRoot: string,
-  command: string,
+  hook: ClaudeHookCommand,
+  legacyCommands: readonly string[] = [],
 ): Promise<number> {
   const settings = await readSettings(projectRoot);
   return stopEntries(settings.value).reduce<number>(
-    (count, entry) => count + entryCommandCount(entry, command),
+    (count, entry) =>
+      count +
+      entryCommandCount(entry, hook) +
+      legacyCommandCount(entry, legacyCommands),
     0,
   );
 }
@@ -156,14 +234,20 @@ async function originalContainerShape(settingsPath: string): Promise<{
 
 export async function installClaudeStopHook(
   projectRoot: string,
-  command: string,
+  hook: ClaudeHookCommand,
+  legacyCommands: readonly string[] = [],
 ): Promise<HookInstallResult> {
   const settings = await readSettings(projectRoot);
-  if (
-    stopEntries(settings.value).some((entry) =>
-      entryContainsCommand(entry, command),
-    )
-  ) {
+  const entries = stopEntries(settings.value);
+  const currentCount = entries.reduce<number>(
+    (count, entry) => count + entryCommandCount(entry, hook),
+    0,
+  );
+  const legacyCount = entries.reduce<number>(
+    (count, entry) => count + legacyCommandCount(entry, legacyCommands),
+    0,
+  );
+  if (currentCount === 1 && legacyCount === 0) {
     return { changed: false, backupPath: null };
   }
 
@@ -177,16 +261,8 @@ export async function installClaudeStopHook(
     throw new Error("Claude settings hooks.Stop must be an array");
   }
   hooks.Stop = [
-    ...existingStop,
-    {
-      hooks: [
-        {
-          type: "command",
-          command,
-          timeout: CLAUDE_HOOK_TIMEOUT_MS / 1_000,
-        },
-      ],
-    },
+    ...removeOwnedHandlers(existingStop, hook, legacyCommands),
+    { hooks: [currentHandler(hook)] },
   ];
   next.hooks = hooks;
 
@@ -199,7 +275,8 @@ export async function installClaudeStopHook(
 
 export async function uninstallClaudeStopHook(
   projectRoot: string,
-  command: string,
+  hook: ClaudeHookCommand,
+  legacyCommands: readonly string[] = [],
 ): Promise<HookUninstallResult> {
   const settings = await readSettings(projectRoot);
   if (!settings.exists) {
@@ -207,7 +284,13 @@ export async function uninstallClaudeStopHook(
   }
 
   const entries = stopEntries(settings.value);
-  if (!entries.some((entry) => entryContainsCommand(entry, command))) {
+  if (
+    !entries.some(
+      (entry) =>
+        entryCommandCount(entry, hook) > 0 ||
+        legacyCommandCount(entry, legacyCommands) > 0,
+    )
+  ) {
     return { changed: false };
   }
 
@@ -216,16 +299,11 @@ export async function uninstallClaudeStopHook(
     throw new Error("Claude settings hooks.Stop must be an array");
   }
 
-  const filteredEntries = next.hooks.Stop.flatMap((entry) => {
-    if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
-      return [entry];
-    }
-    const remainingHooks = entry.hooks.filter(
-      (hook) => !isOwnedCommand(hook, command),
-    );
-    return remainingHooks.length > 0 ? [{ ...entry, hooks: remainingHooks }] : [];
-  });
-
+  const filteredEntries = removeOwnedHandlers(
+    next.hooks.Stop,
+    hook,
+    legacyCommands,
+  );
   const originalShape = await originalContainerShape(settings.path);
 
   if (filteredEntries.length > 0) {

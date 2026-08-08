@@ -49,8 +49,10 @@ It includes:
 - Claude Code `Stop` payload handling;
 - ntfy delivery with a five-second attempt timeout and one transient retry;
 - separate public and private configuration;
-- idempotent project-local Stop-hook installation;
-- `setup`, `test`, `confirm`, `doctor` and `uninstall` commands;
+- a deterministic notification catalog for Spanish and English;
+- idempotent project-local Stop-hook and manual `/noutify` skill installation;
+- an owned shell-free `launcher.mjs` for language changes;
+- `setup`, `test`, `confirm`, `doctor`, `uninstall` and `language` commands;
 - automated core, provider, configuration, installer, CLI and documentation
   contract tests.
 
@@ -74,7 +76,8 @@ is a project-local agent-guided installation:
    then the OS UI locale, then English notifications, and runs the compact
    installer without asking the user for paths.
 4. The installer validates, installs dependencies, tests, type-checks, builds,
-   and configures the hook without replacing existing settings.
+   and configures the hook and skill without replacing existing settings. It
+   keeps the first `settings.local.json.noutify-backup` when settings exist.
 5. Claude reads the final structured record and shows a newly created topic once.
 6. Claude guides the user through private ntfy subscription and testing.
 7. The user explicitly confirms phone receipt.
@@ -82,14 +85,16 @@ is a project-local agent-guided installation:
 
 The English setup contract is language-neutral infrastructure. Spanish maps to
 `es` and English to `en`; unsupported interaction languages use English
-notifications while Claude may explain in the interaction language. Spanish and
+notifications and Claude explains that fallback in the interaction language. Spanish and
 English notifications follow that choice; `/noutify language` can change it
 later. New topics have the form `Noutify-[12 easy characters]`. Commands, paths,
 filenames, configuration keys, and literal output remain unchanged.
 
 The project-local `Noutify/` directory remains in place because Phase 0 installs
-an absolute path to its compiled runtime. Package-based distribution will remove
-this limitation in a later phase.
+its runtime path in exact-owned local files. A safe move requires uninstalling
+at the original path, moving the folder, and running setup again. If it was
+already moved, restore the old path before uninstalling. Package-based
+distribution will remove this limitation in a later phase.
 
 ## 4. Scope and boundaries
 
@@ -235,8 +240,10 @@ flowchart TD
 ### CLI and installer
 
 The CLI validates inputs and exposes stable commands. The installer detects the
-project, merges one owned hook, writes split configuration and supports safe
-diagnosis and removal.
+project, merges one owned exec-form hook, installs `SKILL.md` plus `launcher.mjs`,
+writes split configuration and supports safe diagnosis and removal. Hook
+settings use an absolute Node executable with a literal argument vector. The
+skill launcher resolves its project safely and spawns the CLI without a shell.
 
 ### Agent adapters
 
@@ -260,10 +267,12 @@ other providers remain outside the current phase.
 - keep the successful state machine within 350 words and 2,500 characters;
 - select the conversation language, then OS UI locale, then English notifications;
 - map Spanish to `es` and English to `en`, while unsupported interaction
-  languages receive English notifications and may retain their explanation language;
+  languages receive English notifications and are told that in the interaction language;
 - run `node Noutify/scripts/install.mjs --language <es|en>` without manual paths;
 - parse its final structured `created` or `existing` record;
 - show a newly created topic exactly once, but never repeat it;
+- explain in the interaction language that the topic is private because it is
+  the notification key;
 - never repeat the topic in agent-authored text or artifacts;
 - pause before sending a test;
 - require explicit phone receipt before `confirm`;
@@ -339,6 +348,7 @@ Private local configuration contains provider destination data:
 {
   "server": "https://ntfy.example",
   "topic": "<private-high-entropy-topic>",
+  "language": "es",
   "setupCompleted": false
 }
 ```
@@ -352,11 +362,12 @@ fixtures.
 Implemented Phase 0 commands:
 
 ```text
-noutify setup [--project PATH] [--server URL] [--topic TOPIC]
+noutify setup [--project PATH] [--server URL] [--topic TOPIC] [--language LANGUAGE] [--format json]
 noutify test [--project PATH]
 noutify confirm [--project PATH]
 noutify doctor [--project PATH]
 noutify uninstall [--project PATH]
+noutify language <language> [--project PATH]
 ```
 
 `hook claude-stop` is internal, silent and non-blocking.
@@ -369,7 +380,9 @@ Automated coverage includes:
 - Claude Stop payload validation;
 - configuration validation and rollback;
 - private-file ignore behavior;
-- safe hook merge, idempotency and uninstall;
+- exec-form hook and owned skill merge, migration, idempotency and uninstall;
+- literal language-launcher process execution;
+- deterministic notification catalog selection;
 - CLI option handling and silent internal hooks;
 - ntfy success, timeout and transient retry;
 - documentation installation-contract consistency.
@@ -439,7 +452,7 @@ are future possibilities, not commitments.
 - Public and private configuration remain separate.
 - Topics and credentials are never versioned.
 - Installation merges; it never replaces unrelated settings.
-- Uninstall removes only Noutify-owned hook entries.
+- Uninstall removes only the exact Noutify-owned Stop hook and skill files.
 - Provider failure never blocks the agent's work.
 - Phone receipt must be explicit before setup becomes active.
 - The default onboarding is the project-local one-prompt flow.

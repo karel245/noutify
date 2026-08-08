@@ -45,8 +45,9 @@ Install Noutify following Noutify/SETUP.md.
 ```
 
 Claude detects your language, runs the single compact installer, reads its
-structured final record, and configures the project-local Stop hook. The
-installer verifies Node.js, dependencies, tests, type checking, and the build.
+structured final record, and configures the project-local Stop hook and
+`/noutify` skill. The installer verifies Node.js, dependencies, tests, type
+checking, and the build.
 
 ### 4. Follow the phone prompts
 
@@ -63,10 +64,14 @@ The setup contract is written once in English. Claude uses the latest clear user
 request or established conversation language; otherwise it checks the OS UI
 locale, then uses English notifications. Spanish maps to `es` and English to
 `en`. Spanish and English notifications use the selected setting. For an
-unsupported interaction language, notifications use English while Claude may
-explain in the interaction language. Later, use
+unsupported interaction language, notifications use English and Claude explains
+that fallback in the interaction language. Later, use
 `/noutify language español` or `/noutify language english` in the project to
 change notification language.
+
+The private configuration stores the canonical choice as `"language": "es"` or
+`"language": "en"`. Test and waiting messages come from one deterministic
+notification catalog rather than model-generated text.
 
 Commands, paths, filenames, configuration keys and literal program output stay
 unchanged so the procedure remains reproducible in every language.
@@ -93,7 +98,12 @@ TargetProject/
 |-- .noutify.local.json         private, automatically ignored by Git
 |-- .gitignore                  private-config rule merged once
 `-- .claude/
-    `-- settings.local.json     Stop hook merged with existing settings
+    |-- settings.local.json     Stop hook merged with existing settings
+    |-- settings.local.json.noutify-backup
+    |                           first backup when settings already exist
+    `-- skills/noutify/
+        |-- SKILL.md            manual `/noutify` skill
+        `-- launcher.mjs        owned shell-free language launcher
 ```
 
 Setup is idempotent. Re-running the prompt preserves the existing topic and does
@@ -101,9 +111,10 @@ not duplicate the hook. Existing unrelated Claude hooks are preserved.
 
 ## Keep the folder in place
 
-Do not move or delete `Noutify/` after setup. Phase 0 stores the absolute path to
-`Noutify/dist/cli.js` in the local Claude hook. If the folder moves, run the
-agent-guided setup again from the new location.
+Do not move or delete `Noutify/` after setup. Phase 0 stores its runtime path in
+owned local integration files. To move it safely, uninstall while the original
+path is still available, move `Noutify/`, then run setup again. If it was already
+moved, restore the old path first and uninstall there. See the recovery guide.
 
 When the ZIP is extracted into a tracked project, the parent repository may
 track the Noutify source files. The included Noutify `.gitignore` excludes its
@@ -117,7 +128,7 @@ The one-line Claude prompt is the default installation path. These commands are
 available for troubleshooting or automation:
 
 ```text
-noutify setup [--project PATH] [--server URL] [--topic TOPIC]
+noutify setup [--project PATH] [--server URL] [--topic TOPIC] [--language LANGUAGE] [--format json]
 noutify test [--project PATH]
 noutify confirm [--project PATH]
 noutify doctor [--project PATH]
@@ -157,7 +168,7 @@ The compiled CLI is `dist/cli.js`.
 Ask Claude from the target project:
 
 ```text
-Uninstall Noutify following Noutify/SETUP.md.
+Uninstall Noutify following Noutify/docs/setup-troubleshooting.md#uninstall.
 ```
 
 Or run the advanced command:
@@ -166,8 +177,9 @@ Or run the advanced command:
 node Noutify/dist/cli.js uninstall
 ```
 
-Uninstall removes only the exact Noutify Stop hook. It preserves unrelated
-Claude hooks and keeps configuration available for inspection or reuse.
+Uninstall removes only the exact Noutify-owned Stop hook and skill files. It
+preserves unrelated Claude settings, hooks and skills, and keeps Noutify
+configuration available for inspection or reuse.
 
 ## Current limitations
 
@@ -176,7 +188,8 @@ Claude hooks and keeps configuration available for inspection or reuse.
   completed task.
 - Real-phone subscription and receipt confirmation remain manual security and
   acceptance gates.
-- Moving the project-local Noutify folder requires reinstalling the hook.
+- Moving the project-local Noutify folder requires the uninstall/move/setup
+  recovery sequence above.
 - Package-based installation such as `npx noutify init` remains future work.
 
 See [NOUTIFY_CONTEXT.md](./NOUTIFY_CONTEXT.md) for the canonical product vision,

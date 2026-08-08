@@ -212,26 +212,35 @@ The supported initial invocation is:
 /noutify language english
 ```
 
-The skill is manually invocable and must not trigger autonomously. Its body is
-short, validates that the first argument is `language`, invokes the absolute
-project-local Noutify CLI path, and reports the result without reading or
-printing private configuration.
+The skill is manually invocable and must not trigger autonomously. YAML
+frontmatter is the first content in `SKILL.md`; it includes the manual-only
+metadata, and the `noutify-managed:v2` marker follows the closing delimiter. Its
+body validates the `language` arguments and selects one fixed relative launcher
+command. The owned `launcher.mjs` derives the project root from its own location,
+uses the generated CLI file URL, and invokes the CLI through
+`spawnSync(process.execPath, args)` with no shell.
 
-The installer owns only a file containing the exact Noutify marker and generated
-content. Behavior is conservative:
+The installer owns the exact generated skill and supporting launcher. Behavior
+is conservative:
 
 - create the skill when absent;
 - keep it unchanged when the exact current version is already installed;
-- update it when an older Noutify-owned version is recognized;
-- stop instead of overwriting an unrelated `.claude/skills/noutify/SKILL.md`;
-- uninstall only an exact recognized Noutify-owned skill;
+- update the exact invalid v0/v1 layouts published at the current paths;
+- stop instead of overwriting an unrelated `SKILL.md` or `launcher.mjs`;
+- uninstall only exact recognized Noutify-owned files;
 - preserve every other project skill and command.
 
 Setup checks for an unrelated skill-path collision before changing target
 configuration. For a new installation, it snapshots the target `.gitignore`,
-public/private configuration, Claude settings and Noutify skill path. A failure
-while writing any owned component restores every snapshot, so the new skill does
-not introduce an additional partial-install state.
+public/private configuration, Claude settings, settings backup, skill and
+launcher paths. A failure while writing any owned component restores every
+snapshot, so the new files do not introduce an additional partial-install state.
+
+The Claude Stop hook uses exec form: the absolute Node executable is `command`
+and the CLI path plus subcommand and project path are separate `args`. Exact
+identity, migration, diagnosis and uninstall compare both fields. This
+frontmatter/launcher/exec-form correction supersedes the earlier marker-first,
+absolute shell-command design with the user's final-review approval.
 
 The skill may become visible immediately through Claude Code live discovery or
 on the next session. Documentation must not promise availability before Claude

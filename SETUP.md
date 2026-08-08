@@ -8,16 +8,18 @@ or read `.noutify.local.json`.
 Use the latest clear user request or established conversation language. Otherwise
 inspect `[System.Globalization.CultureInfo]::CurrentUICulture`. Map Spanish to
 `es` and English to `en`; otherwise use English notifications. For an unsupported
-interaction language, use English notifications but may explain in the interaction
-language. Commands and JSON stay unchanged.
+interaction language, use English notifications and tell the user in the interaction
+language that notifications will use English. Commands and JSON stay unchanged.
 
 ## Prepare
 
 Run one command: `node Noutify/scripts/install.mjs --language <es|en>`. Read
 only its final JSON record. For `created`, Show the new topic once in the
-interaction language. Never repeat the topic after that display in chat, logs,
-summaries, commits, docs, issues, diagnostics, artifacts, or generated files.
-For `existing` or any failure, use the conditional guide below.
+interaction language and tell the user in the interaction language that it is
+private because it functions as the notification key. Never repeat the topic after
+that display in chat, logs, summaries, commits, docs, issues, diagnostics,
+artifacts, or generated files. For `existing` or any failure, use the conditional
+guide below.
 
 ## Subscribe
 
@@ -32,9 +34,10 @@ receipt of the localized test notification. Only then run
 
 ## Accept
 
-Report success only when `doctor` passes after that explicit receipt. Later,
-`/noutify language español` or `/noutify language english` changes notification
-language.
+Report configuration success only when `doctor` passes after that explicit receipt.
+Automatic Stop-hook phone acceptance remains pending until the owner observes a real
+Stop notification. Later, `/noutify language español` or
+`/noutify language english` changes notification language.
 
 ## On failure
 
