@@ -42,10 +42,37 @@ function launcherPath(root: string): string {
   return join(skillDirectory(root), "launcher.mjs");
 }
 
-function legacySkill(
+function historicalV0Skill(
   root: string,
   selectedRuntime: typeof runtime,
-  version: "v0" | "v1",
+): string {
+  const command = [
+    `"${selectedRuntime.nodePath}"`,
+    `"${selectedRuntime.cliPath}"`,
+    "language",
+    '"<language>"',
+    "--project",
+    `"${resolve(root)}"`,
+  ].join(" ");
+  return `<!-- noutify-managed:v0 -->
+---
+name: noutify
+description: Configure Noutify for this project.
+argument-hint: language <english|español>
+disable-model-invocation: true
+---
+
+Use \`$ARGUMENTS\` only for \`language <language>\`.
+
+1. Accept exactly two arguments whose first value is \`language\`; otherwise show \`/noutify language <english|español>\` and stop.
+2. Run the generated, quoted absolute command: \`${command}\`. Replace only \`<language>\` with the second argument. Do not run another Noutify subcommand.
+3. Report the command result. Never read or print \`.noutify.local.json\` or its topic.
+`;
+}
+
+function historicalV1Skill(
+  root: string,
+  selectedRuntime: typeof runtime,
 ): string {
   const command = (language: "en" | "es") => [
     `"${selectedRuntime.nodePath}"`,
@@ -55,7 +82,7 @@ function legacySkill(
     "--project",
     `"${resolve(root)}"`,
   ].join(" ");
-  return `<!-- noutify-managed:${version} -->
+  return `<!-- noutify-managed:v1 -->
 ---
 name: noutify
 description: Configure Noutify for this project.
@@ -209,12 +236,15 @@ describe("owned Claude skill lifecycle", () => {
     await expect(readFile(launcherPath(root), "utf8")).resolves.toBe(initialLauncher);
   });
 
-  it.each(["v0", "v1"] as const)(
-    "upgrades the exact invalid %s skill published for the same paths",
-    async (version) => {
+  it.each([
+    ["v0", historicalV0Skill],
+    ["v1", historicalV1Skill],
+  ] as const)(
+    "upgrades the exact historical %s skill published for the same paths",
+    async (_version, fixture) => {
       const root = await temporaryProject();
       await mkdir(skillDirectory(root), { recursive: true });
-      await writeFile(skillPath(root), legacySkill(root, runtime, version), "utf8");
+      await writeFile(skillPath(root), fixture(root, runtime), "utf8");
 
       await expect(preflightClaudeSkill(root, runtime)).resolves.toBeUndefined();
       await expect(installClaudeSkill(root, runtime)).resolves.toEqual({ changed: true });
@@ -227,16 +257,24 @@ describe("owned Claude skill lifecycle", () => {
     },
   );
 
-  it("uninstalls an exact legacy skill for the same paths", async () => {
-    const root = await temporaryProject();
-    await mkdir(skillDirectory(root), { recursive: true });
-    await writeFile(skillPath(root), legacySkill(root, runtime, "v1"), "utf8");
+  it.each([
+    ["v0", historicalV0Skill],
+    ["v1", historicalV1Skill],
+  ] as const)(
+    "uninstalls the exact historical %s skill for the same paths",
+    async (_version, fixture) => {
+      const root = await temporaryProject();
+      await mkdir(skillDirectory(root), { recursive: true });
+      await writeFile(skillPath(root), fixture(root, runtime), "utf8");
 
-    await expect(uninstallClaudeSkill(root, runtime)).resolves.toEqual({ changed: true });
-    await expect(readFile(skillPath(root), "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      await expect(uninstallClaudeSkill(root, runtime)).resolves.toEqual({
+        changed: true,
+      });
+      await expect(readFile(skillPath(root), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   it("refuses a colliding unrelated skill without overwriting it", async () => {
     const root = await temporaryProject();

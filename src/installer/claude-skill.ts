@@ -46,10 +46,37 @@ function validateRuntime(runtime: ClaudeSkillRuntime): void {
   }
 }
 
-function buildLegacyClaudeSkill(
+function buildLegacyClaudeSkillV0(
   projectRoot: string,
   runtime: ClaudeSkillRuntime,
-  version: "v0" | "v1",
+): string {
+  const command = [
+    quoteArgument(runtime.nodePath),
+    quoteArgument(runtime.cliPath),
+    "language",
+    '"<language>"',
+    "--project",
+    quoteArgument(resolve(projectRoot)),
+  ].join(" ");
+  return `<!-- noutify-managed:v0 -->
+---
+name: noutify
+description: Configure Noutify for this project.
+argument-hint: language <english|español>
+disable-model-invocation: true
+---
+
+Use \`$ARGUMENTS\` only for \`language <language>\`.
+
+1. Accept exactly two arguments whose first value is \`language\`; otherwise show \`/noutify language <english|español>\` and stop.
+2. Run the generated, quoted absolute command: \`${command}\`. Replace only \`<language>\` with the second argument. Do not run another Noutify subcommand.
+3. Report the command result. Never read or print \`.noutify.local.json\` or its topic.
+`;
+}
+
+function buildLegacyClaudeSkillV1(
+  projectRoot: string,
+  runtime: ClaudeSkillRuntime,
 ): string {
   const command = (language: "en" | "es") => [
     quoteArgument(runtime.nodePath),
@@ -59,7 +86,7 @@ function buildLegacyClaudeSkill(
     "--project",
     quoteArgument(resolve(projectRoot)),
   ].join(" ");
-  return `<!-- noutify-managed:${version} -->
+  return `<!-- noutify-managed:v1 -->
 ---
 name: noutify
 description: Configure Noutify for this project.
@@ -149,8 +176,8 @@ function isRecognizedSkill(
 ): boolean {
   return (
     contents === buildClaudeSkill(projectRoot, runtime) ||
-    contents === buildLegacyClaudeSkill(projectRoot, runtime, "v1") ||
-    contents === buildLegacyClaudeSkill(projectRoot, runtime, "v0")
+    contents === buildLegacyClaudeSkillV1(projectRoot, runtime) ||
+    contents === buildLegacyClaudeSkillV0(projectRoot, runtime)
   );
 }
 

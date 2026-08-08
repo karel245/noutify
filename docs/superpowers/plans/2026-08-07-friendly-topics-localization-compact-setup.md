@@ -557,7 +557,7 @@ Each captured stage result has:
 { status: 0, stdout: "", stderr: "" }
 ```
 
-On success, write only `PASS <stage>` and the final JSON setup record. On failure, write `FAIL <stage> (exit <code>)`, captured stdout/stderr and `See Noutify/docs/setup-troubleshooting.md`, then return 1. Never execute setup if a preparation stage fails.
+On successful preparatory stages, write only `PASS <stage>`. Preparatory-stage failures may expose captured diagnostics with `FAIL <stage> (exit <code>)` and `See Noutify/docs/setup-troubleshooting.md`, then return 1. Never execute setup if a preparation stage fails. Reconstruct successful setup output only from a strictly validated setup record. Invalid setup output never echoes raw setup stdout/stderr or a possible topic. An `existing` status may return the stored canonical language instead of the requested language.
 
 - [x] **Step 4: Run script, full tests and build GREEN**
 

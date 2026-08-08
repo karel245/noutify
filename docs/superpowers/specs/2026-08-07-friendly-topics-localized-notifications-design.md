@@ -284,20 +284,26 @@ tests, type checking and build succeed.
 
 ### Output policy
 
-Successful stages produce only concise status lines. Child command output is
-captured rather than streamed. On failure, the installer prints:
+Successful preparatory stages produce only concise status lines. Child command
+output is captured rather than streamed. On a preparatory-stage failure, the
+installer may print:
 
 - the failed stage;
 - the child exit code;
 - the captured stdout/stderr required for diagnosis;
 - a pointer to the on-demand troubleshooting document.
 
+Successful setup output is reconstructed from a strictly validated setup record;
+raw setup stdout/stderr is never forwarded. Invalid setup output never echoes
+raw setup stdout/stderr or a possible topic.
+
 The final successful first-install response uses a stable machine-readable
 record containing status, canonical language, server and topic. Claude uses this
 record to present the localized subscription message once.
 
 An existing installation returns a distinct status without representing the
-topic as newly generated.
+topic as newly generated and may return the stored canonical language instead of
+the requested language.
 
 ## 7. Compact Agent Contract
 
