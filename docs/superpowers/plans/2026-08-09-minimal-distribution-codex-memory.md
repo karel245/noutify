@@ -223,8 +223,10 @@ git commit -m "refactor: share waiting hook delivery"
 - Create: `src/installer/agent-adapter.ts`
 - Create: `src/installer/adapters/claude-code.ts`
 - Modify: `src/installer/setup.ts`
+- Modify: `src/cli.ts`
 - Modify: `tests/installer/setup.test.ts`
 - Create: `tests/installer/agent-adapter.test.ts`
+- Modify: `tests/cli.test.ts`
 
 **Interfaces:**
 - Consumes: existing Claude settings and skill installers.
@@ -232,6 +234,7 @@ git commit -m "refactor: share waiting hook delivery"
 - Produces: `AdapterContext { projectRoot: string; runtime: RuntimePaths }`.
 - Produces: `AdapterInspection { installed: boolean; detail: string }` and `AdapterMutation { changed: boolean }`.
 - Produces: `nativeAdapter(id: NativeAgentId): AgentAdapter`, initially implemented for `claude-code` and throwing `native adapter is not available: <id>` for deferred IDs.
+- Produces: `SetupProjectInput.agents?: readonly AgentId[]`. An omitted value retains temporary source-installer compatibility by selecting `claude-code`; an explicitly supplied empty array is rejected. Explicit CLI `--agent` values are parsed and forwarded. Task 7's minimal installer always supplies at least one explicit agent.
 
 - [ ] **Step 1: Write failing registry and Claude-only orchestration tests**
 
@@ -248,6 +251,13 @@ expect(adapter.ownedPaths(context)).toEqual([
 await setupProject({ ...runtime, projectRoot, agents: ["claude-code"] });
 expect((await readProjectConfig(projectRoot)).public.integrations)
   .toEqual([{ agent: "claude-code", mode: "native", path: ".claude/settings.local.json" }]);
+
+await setupProject({ ...runtime, projectRoot });
+expect((await readProjectConfig(projectRoot)).public.integrations)
+  .toEqual([{ agent: "claude-code", mode: "native", path: ".claude/settings.local.json" }]);
+
+await expect(setupProject({ ...runtime, projectRoot, agents: [] }))
+  .rejects.toThrow("at least one agent is required");
 ```
 
 - [ ] **Step 2: Run focused tests and verify registry failures**
@@ -271,7 +281,7 @@ export interface AgentAdapter {
 }
 ```
 
-Extend `SetupProjectInput` with `agents: readonly AgentId[]`; require at least one selection for new installs, retain migrated Claude for v1 existing installs when `agents` is omitted, and reject a requested native adapter before snapshots if it is not registered. Keep exact legacy Claude migration in its adapter.
+Extend `SetupProjectInput` with optional `agents`. Normalize omission to `["claude-code"]` for compatibility with the existing source installer and direct API callers; reject an explicitly supplied empty list. Parse and forward explicit repeated CLI `--agent` values. For existing v1 installs, omission retains migrated Claude. Reject a requested native adapter before snapshots if it is not registered. Keep exact legacy Claude migration in its adapter. The Task 7 distribution installer must always pass explicit selections, so the public compact flow never relies on this fallback.
 
 - [ ] **Step 4: Run installer tests and regression suite**
 
@@ -282,7 +292,7 @@ Expected: PASS for new Claude-only setup, existing v1 setup, collision, rollback
 - [ ] **Step 5: Commit the adapter boundary**
 
 ```powershell
-git add src/installer/agent-adapter.ts src/installer/adapters/claude-code.ts src/installer/setup.ts tests/installer/agent-adapter.test.ts tests/installer/setup.test.ts
+git add src/installer/agent-adapter.ts src/installer/adapters/claude-code.ts src/installer/setup.ts src/cli.ts tests/installer/agent-adapter.test.ts tests/installer/setup.test.ts tests/cli.test.ts
 git commit -m "refactor: install agents through adapters"
 ```
 
