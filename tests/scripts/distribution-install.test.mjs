@@ -2,7 +2,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { packageDistribution } from "../../scripts/package.mjs";
@@ -35,13 +35,16 @@ async function listRelativeFiles(root, ignoredTopLevel = new Set()) {
 }
 
 async function packagedCopy() {
-  const fixture = await mkdtemp(join(tmpdir(), "noutify-distribution-source-"));
+  await mkdir(join(repositoryRoot, "work"), { recursive: true });
+  const fixture = await mkdtemp(join(repositoryRoot, "work", "distribution-fixture-"));
   const target = await mkdtemp(join(tmpdir(), "noutify-distribution-target-"));
   temporaryRoots.push(fixture, target);
   await mkdir(join(fixture, "docs"), { recursive: true });
   await mkdir(join(fixture, "scripts"), { recursive: true });
   await Promise.all([
-    cp(join(repositoryRoot, "dist"), join(fixture, "dist"), { recursive: true }),
+    cp(join(repositoryRoot, "src"), join(fixture, "src"), { recursive: true }),
+    cp(join(repositoryRoot, "tsconfig.json"), join(fixture, "tsconfig.json")),
+    cp(join(repositoryRoot, "tsconfig.build.json"), join(fixture, "tsconfig.build.json")),
     cp(join(repositoryRoot, "LICENSE"), join(fixture, "LICENSE")),
     cp(join(repositoryRoot, "SETUP.md"), join(fixture, "SETUP.md")),
     cp(
@@ -60,6 +63,39 @@ async function packagedCopy() {
 }
 
 describe("lightweight distribution installer", () => {
+  it("blocks fetch, HTTP(S), TCP, and DNS in the guarded child runtime", () => {
+    const guardPath = join(repositoryRoot, "scripts", "offline-network-guard.mjs");
+    const probe = `
+      import http from "node:http";
+      import https from "node:https";
+      import net from "node:net";
+      import dns from "node:dns";
+      const attempts = [
+        () => fetch("http://127.0.0.1:9"),
+        () => http.get("http://127.0.0.1:9"),
+        () => https.get("https://127.0.0.1:9"),
+        () => net.connect(9, "127.0.0.1"),
+        () => dns.lookup("localhost", () => {}),
+      ];
+      const codes = [];
+      for (const attempt of attempts) {
+        try { await attempt(); }
+        catch (error) { codes.push(error.code); }
+      }
+      if (codes.length !== 5 || codes.some((code) => code !== "NOUTIFY_OFFLINE_NETWORK_DISABLED")) {
+        process.exitCode = 7;
+      }
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(guardPath).href, "--input-type=module", "--eval", probe],
+      { encoding: "utf8", windowsHide: true, shell: false },
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   it("preserves repeated explicit agents and memory links", () => {
     expect(
       parseDistributionArguments([

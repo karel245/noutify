@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   copyFile,
   cp,
@@ -13,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validateDistributionArtifact } from "./distribution-install.mjs";
@@ -34,6 +35,19 @@ export function validateReleasePath(repositoryRoot, releaseRoot) {
   return expected;
 }
 
+export function validateTemporaryBuildPath(temporaryRoot, buildRoot) {
+  const parent = resolve(temporaryRoot);
+  const target = resolve(buildRoot);
+  if (
+    dirname(target) !== parent ||
+    !basename(target).startsWith("noutify-build-") ||
+    basename(target).length <= "noutify-build-".length
+  ) {
+    throw new Error("unsafe temporary build path");
+  }
+  return target;
+}
+
 export function manifestEntry(relativePath, bytes) {
   return {
     path: relativePath.replaceAll("\\", "/"),
@@ -41,8 +55,20 @@ export function manifestEntry(relativePath, bytes) {
   };
 }
 
-async function listCompiledJavaScript(root) {
-  const distRoot = join(root, "dist");
+export function offlineChildEnvironment(baseEnvironment, guardPath) {
+  const importOption = `--import=${pathToFileURL(resolve(guardPath)).href}`;
+  const existingOptions = String(baseEnvironment.NODE_OPTIONS ?? "").trim();
+  return {
+    ...baseEnvironment,
+    HTTP_PROXY: "http://127.0.0.1:1",
+    HTTPS_PROXY: "http://127.0.0.1:1",
+    ALL_PROXY: "http://127.0.0.1:1",
+    NO_PROXY: "",
+    NODE_OPTIONS: existingOptions ? `${existingOptions} ${importOption}` : importOption,
+  };
+}
+
+async function listCompiledJavaScript(distRoot) {
   const files = [];
   async function visit(folder) {
     for (const entry of await readdir(folder, { withFileTypes: true })) {
@@ -50,6 +76,7 @@ async function listCompiledJavaScript(root) {
       if (entry.isSymbolicLink()) throw new Error("compiled output may not contain symbolic links");
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile() && entry.name.endsWith(".js")) files.push(path);
+      else throw new Error("isolated build contains a non-JavaScript file");
     }
   }
   await visit(distRoot);
@@ -63,28 +90,78 @@ async function listCompiledJavaScript(root) {
   });
 }
 
-function runNodeGate(root, label, entry, argumentsList) {
+function runNodeGate(root, label, entry, argumentsList, inheritOutput = true) {
   const result = spawnSync(process.execPath, [entry, ...argumentsList], {
     cwd: root,
     encoding: "utf8",
     windowsHide: true,
-    stdio: "inherit",
+    stdio: inheritOutput ? "inherit" : "pipe",
     shell: false,
   });
   if (result.status !== 0) {
-    throw new Error(`${label} failed with exit ${result.status ?? 1}`);
+    const diagnostics = inheritOutput
+      ? ""
+      : `: ${String(result.stderr ?? result.stdout ?? "").trim()}`;
+    throw new Error(`${label} failed with exit ${result.status ?? 1}${diagnostics}`);
   }
 }
 
 function runQualityGates(root) {
   const tsc = join(root, "node_modules", "typescript", "bin", "tsc");
   const vitest = join(root, "node_modules", "vitest", "vitest.mjs");
-  runNodeGate(root, "build", tsc, ["-p", "tsconfig.build.json"]);
   runNodeGate(root, "tests", vitest, ["run"]);
   runNodeGate(root, "typecheck", tsc, ["-p", "tsconfig.json", "--noEmit"]);
 }
 
-async function createArtifact(root, releaseRoot) {
+function findToolingRoot(root) {
+  let candidate = resolve(root);
+  while (true) {
+    const compiler = join(candidate, "node_modules", "typescript", "bin", "tsc");
+    if (existsSync(compiler)) return candidate;
+    const next = dirname(candidate);
+    if (next === candidate) break;
+    candidate = next;
+  }
+  throw new Error("TypeScript compiler is unavailable");
+}
+
+async function compileIsolatedRuntime(root) {
+  const temporaryRoot = resolve(tmpdir());
+  const buildRoot = validateTemporaryBuildPath(
+    temporaryRoot,
+    await mkdtemp(join(temporaryRoot, "noutify-build-")),
+  );
+  const output = join(buildRoot, "dist");
+  try {
+    const toolingRoot = findToolingRoot(root);
+    const compiler = join(toolingRoot, "node_modules", "typescript", "bin", "tsc");
+    runNodeGate(
+      root,
+      "build",
+      compiler,
+      [
+        "-p",
+        join(root, "tsconfig.build.json"),
+        "--outDir",
+        output,
+        "--declaration",
+        "false",
+        "--sourceMap",
+        "false",
+      ],
+      false,
+    );
+    return { buildRoot, temporaryRoot, output };
+  } catch (error) {
+    await rm(
+      validateTemporaryBuildPath(temporaryRoot, buildRoot),
+      { recursive: true, force: true },
+    );
+    throw error;
+  }
+}
+
+async function createArtifact(root, releaseRoot, compiledRoot) {
   const output = validateReleasePath(root, releaseRoot);
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
@@ -94,9 +171,8 @@ async function createArtifact(root, releaseRoot) {
     await mkdir(dirname(target), { recursive: true });
     await copyFile(join(root, ...source.split("/")), target);
   }
-  const distRoot = join(root, "dist");
-  for (const source of await listCompiledJavaScript(root)) {
-    const destination = join(output, "dist", relative(distRoot, source));
+  for (const source of await listCompiledJavaScript(compiledRoot)) {
+    const destination = join(output, "dist", relative(compiledRoot, source));
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(source, destination);
   }
@@ -128,7 +204,7 @@ async function createArtifact(root, releaseRoot) {
   return output;
 }
 
-async function smokeInstallOffline(artifact) {
+async function smokeInstallOffline(artifact, root) {
   const smokeRoot = await mkdtemp(join(tmpdir(), "noutify-package-smoke-"));
   try {
     const target = join(smokeRoot, "Target");
@@ -137,18 +213,23 @@ async function smokeInstallOffline(artifact) {
     await cp(artifact, copiedArtifact, { recursive: true });
     const result = spawnSync(
       process.execPath,
-      [join(copiedArtifact, "install.mjs"), "--language", "en", "--agent", "codex"],
+      [
+        join(copiedArtifact, "install.mjs"),
+        "--language",
+        "en",
+        "--agent",
+        "codex",
+      ],
       {
         cwd: target,
         encoding: "utf8",
         windowsHide: true,
         shell: false,
         env: {
-          ...process.env,
-          HTTP_PROXY: "http://127.0.0.1:1",
-          HTTPS_PROXY: "http://127.0.0.1:1",
-          ALL_PROXY: "http://127.0.0.1:1",
-          NO_PROXY: "",
+          ...offlineChildEnvironment(
+            process.env,
+            join(root, "scripts", "offline-network-guard.mjs"),
+          ),
           NODE_PATH: join(smokeRoot, "missing-node-modules"),
         },
       },
@@ -165,9 +246,21 @@ export async function packageDistribution(options = {}) {
   const root = resolve(options.root ?? moduleRoot);
   const runGates = options.runQualityGates !== false;
   if (runGates) runQualityGates(root);
-  const artifact = await createArtifact(root, join(root, "release", "Noutify"));
-  if (runGates) await smokeInstallOffline(artifact);
-  return artifact;
+  const build = await compileIsolatedRuntime(root);
+  try {
+    const artifact = await createArtifact(
+      root,
+      join(root, "release", "Noutify"),
+      build.output,
+    );
+    if (runGates) await smokeInstallOffline(artifact, root);
+    return artifact;
+  } finally {
+    await rm(
+      validateTemporaryBuildPath(build.temporaryRoot, build.buildRoot),
+      { recursive: true, force: true },
+    );
+  }
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
