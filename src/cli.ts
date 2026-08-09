@@ -3,13 +3,22 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-import { readProjectConfig } from "./config/project-config.js";
+import {
+  readProjectConfig,
+  type ProjectConfigBundle,
+} from "./config/project-config.js";
 import { normalizeNotificationLanguage } from "./config/language.js";
-import { parseAgentId } from "./config/integrations.js";
+import {
+  parseAgentId,
+  type NativeAgentId,
+} from "./config/integrations.js";
 import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
 import { parseCodexStopPayload } from "./agents/codex/stop.js";
 import { parseCopilotAgentStopPayload } from "./agents/copilot-cli/agent-stop.js";
-import { runWaitingHook } from "./agents/waiting-hook.js";
+import {
+  runWaitingHook,
+  type WaitingHookPayload,
+} from "./agents/waiting-hook.js";
 import { parseGeminiAfterAgentPayload } from "./agents/gemini-cli/after-agent.js";
 import { parseWindsurfPostResponsePayload } from "./agents/windsurf/post-cascade-response.js";
 import type { Notification } from "./core/types.js";
@@ -24,6 +33,7 @@ import {
   type NotificationSender,
 } from "./installer/setup.js";
 import { parseMemoryLink } from "./installer/agent-memory.js";
+import { AVAILABLE_NATIVE_ADAPTERS } from "./installer/agent-adapter.js";
 import { sendNtfy, type SendResult } from "./providers/ntfy.js";
 
 export interface CliIo {
@@ -173,6 +183,34 @@ function phaseZeroDependencies(dependencies: CliDependencies) {
   };
 }
 
+async function runSelectedNativeWaitingHook(
+  input: string,
+  bundle: ProjectConfigBundle,
+  agent: NativeAgentId,
+  parse: (value: string) => WaitingHookPayload,
+  sender: NotificationSender,
+): Promise<void> {
+  const adapter = AVAILABLE_NATIVE_ADAPTERS.get(agent);
+  if (adapter === undefined || adapter.id !== agent || adapter.mode !== "native") {
+    return;
+  }
+  const selected = bundle.public.integrations.some(
+    (integration) =>
+      integration.agent === adapter.id && integration.mode === adapter.mode,
+  );
+  if (!selected) return;
+
+  await runWaitingHook(input, {
+    agent: adapter.id,
+    projectName: bundle.public.project.name,
+    language: bundle.private.language,
+    enabled: bundle.public.events.waiting,
+    confirmed: bundle.private.setupCompleted,
+    parse,
+    send: (notification) => sender(notification, bundle.private),
+  });
+}
+
 async function runClaudeStopHook(
   projectRoot: string,
   io: CliIo,
@@ -183,15 +221,13 @@ async function runClaudeStopHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    await runWaitingHook(input, {
-      agent: "claude-code",
-      projectName: bundle.public.project.name,
-      language: bundle.private.language,
-      enabled: bundle.public.events.waiting,
-      confirmed: bundle.private.setupCompleted,
-      parse: parseClaudeStopPayload,
-      send: (notification) => sender(notification, bundle.private),
-    });
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "claude-code",
+      parseClaudeStopPayload,
+      sender,
+    );
   } catch {
     // Internal hooks must be silent and non-blocking under every failure mode.
   }
@@ -208,15 +244,13 @@ async function runCodexStopHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    await runWaitingHook(input, {
-      agent: "codex",
-      projectName: bundle.public.project.name,
-      language: bundle.private.language,
-      enabled: bundle.public.events.waiting,
-      confirmed: bundle.private.setupCompleted,
-      parse: parseCodexStopPayload,
-      send: (notification) => sender(notification, bundle.private),
-    });
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "codex",
+      parseCodexStopPayload,
+      sender,
+    );
   } catch {
     // Internal hooks must be silent and non-blocking under every failure mode.
   }
@@ -233,15 +267,13 @@ async function runGeminiAfterAgentHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    await runWaitingHook(input, {
-      agent: "gemini-cli",
-      projectName: bundle.public.project.name,
-      language: bundle.private.language,
-      enabled: bundle.public.events.waiting,
-      confirmed: bundle.private.setupCompleted,
-      parse: parseGeminiAfterAgentPayload,
-      send: (notification) => sender(notification, bundle.private),
-    });
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "gemini-cli",
+      parseGeminiAfterAgentPayload,
+      sender,
+    );
   } catch {
     // Gemini hooks must remain non-blocking and always receive valid JSON.
   } finally {
@@ -260,15 +292,13 @@ async function runCopilotAgentStopHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    await runWaitingHook(input, {
-      agent: "copilot-cli",
-      projectName: bundle.public.project.name,
-      language: bundle.private.language,
-      enabled: bundle.public.events.waiting,
-      confirmed: bundle.private.setupCompleted,
-      parse: parseCopilotAgentStopPayload,
-      send: (notification) => sender(notification, bundle.private),
-    });
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "copilot-cli",
+      parseCopilotAgentStopPayload,
+      sender,
+    );
   } catch {
     // Copilot hooks must remain silent and non-blocking under every failure mode.
   } finally {
@@ -287,15 +317,13 @@ async function runWindsurfPostResponseHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    await runWaitingHook(input, {
-      agent: "windsurf",
-      projectName: bundle.public.project.name,
-      language: bundle.private.language,
-      enabled: bundle.public.events.waiting,
-      confirmed: bundle.private.setupCompleted,
-      parse: parseWindsurfPostResponsePayload,
-      send: (notification) => sender(notification, bundle.private),
-    });
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "windsurf",
+      parseWindsurfPostResponsePayload,
+      sender,
+    );
   } catch {
     // Windsurf hooks must remain silent and non-blocking under every failure mode.
   }
