@@ -1,8 +1,8 @@
 # Noutify
 
 Noutify sends short, private phone notifications when a coding agent returns
-control. It never sends prompts, transcripts, or response content. `WAITING`
-means an agent turn ended; it does not mean that work is complete.
+control. `WAITING` means an agent turn ended; it never means that work is
+complete. Noutify never sends prompts, transcripts, or response content.
 
 ## Generate the release folder
 
@@ -21,16 +21,16 @@ Copy the resulting `release/Noutify/` folder directly into the target project.
 
 ## Install in one prompt
 
-Open any capable coding agent from that project and send exactly:
+Open a capable coding agent from that target project and send exactly:
 
-   ```text
-   Install Noutify following Noutify/SETUP.md.
-   ```
+```text
+Install Noutify following Noutify/SETUP.md.
+```
 
-The agent follows the language and platform-selection contract, runs the
-offline installer, and guides the private phone-confirmation steps. The target
-path is validated on Windows with Node.js 24 or newer; it does not need npm,
-source code, or a build step.
+The agent selects the notification language from the interaction, proposes its
+detected platform, asks which agents will use the project, and runs the offline
+installer with explicit selections. The validated target path is Windows with
+Node.js 24 or newer; it does not need npm, source code, or a build step.
 
 Do not move or delete `Noutify/` after setup. Run `uninstall` before moving it,
 then install it again at the new location.
@@ -39,15 +39,18 @@ then install it again at the new location.
 
 | Platform | Status | What it means |
 | --- | --- | --- |
-| Codex | native unverified | Project-local Stop hook; owner must trust it through `/hooks` and confirm a later real-turn receipt before relying on it. |
-| Claude Code | native unverified | Project-local Stop hook and language skill; confirm a real receipt before relying on it. |
-| Other agents with durable project instructions | memory best effort | An explicit memory file can hold one managed instruction; it is not a reliable lifecycle hook. |
-| Gemini CLI, GitHub Copilot CLI, Windsurf | unsupported or untested | Planned native adapters; this release does not install them. |
-| Other agents without durable memory | unsupported or untested | No automatic notification claim is made. |
+| Claude Code | native unverified | Project-local `Stop` hook and Noutify skill are installed; a later real-turn receipt and `confirm-agent claude-code` are still required. |
+| Codex | native unverified | Project-local `Stop` hook is installed; the owner must review and trust it through `/hooks`, then confirm a later real-turn receipt. |
+| Gemini CLI | native unverified | Project-local `AfterAgent` hook is installed; reload, receive a real later-turn notification, and confirm it before relying on it. |
+| GitHub Copilot CLI (local) | native unverified | Project-local `agentStop` hook is installed for the local CLI only; Copilot cloud is unsupported and untested. |
+| Windsurf Cascade | native unverified | Project-local `post_cascade_response` hook is installed; reload, receive a real later-turn notification, and confirm it before relying on it. |
+| Durable-memory agents | memory best effort | An explicit project-memory file can contain one managed instruction; it is not a lifecycle hook. |
+| Cursor, OpenCode, Cline, Copilot cloud | unsupported or untested | No native automatic-notification claim is made. |
 
-Noutify uses project-local integrations and never changes a user's global agent
-settings. A project can select both Codex and Claude Code, or a generic memory
-integration, during setup.
+“Native” means a deterministic project-local adapter exists. “Unverified” is
+intentional: no native adapter is promoted to verified until a real device has
+received an automatic notification and the owner has explicitly confirmed that
+receipt. A project may select multiple native agents in one transaction.
 
 ## Confirmation is deliberate
 

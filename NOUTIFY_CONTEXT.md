@@ -1,6 +1,6 @@
 # Noutify — master project context
 
-> Status: minimal multi-agent distribution, Plan 1
+> Status: minimal multi-agent distribution, Plan 2
 > Audience: maintainers and coding agents
 
 ## Purpose
@@ -24,7 +24,7 @@ or repository tests. The artifact is generated locally with `npm run package`,
 ignored by Git, and is not yet published or downloadable from the repository.
 
 Public configuration records selected integrations and safe project settings.
-Private `.noutify.local.json` holds the topic and is ignored by Git. Topics,
+Private configuration holds the topic and phone-confirmation state. Topics,
 prompts, transcripts, agent responses, credentials, and device data must never
 enter documentation, diagnostics, manifests, hooks, tests, or commits.
 
@@ -45,34 +45,34 @@ The executing agent uses the latest clear user-request language, then the
 established conversation language, then OS UI language, then English. Spanish
 selects `es`; all other interaction languages select `en` and receive an
 interaction-language explanation that notifications will use English. It
-proposes the current platform but asks for explicit one-or-more agent selections.
+proposes the current platform but asks for explicit one-or-more agent
+selections.
 
 After a new installation, the topic is shown once only. The owner subscribes,
 receives a manual localized test, explicitly confirms it, and checks `doctor`.
 This confirms the phone channel, not automatic delivery. Each native adapter
 needs its own later real-turn receipt and `confirm-agent <id>`; `doctor` never
-infers receipt from installed files or delivery success.
-
-Codex additionally requires the owner to review and trust the project-local
-hook through `/hooks`. Generic adapters use a user-identified durable memory
-file when available; without one they are pending, and with one they remain
-best effort rather than a lifecycle guarantee. The `Noutify/` folder must stay
-in its installed position until explicit uninstall.
+infers receipt from installed files or delivery success. Codex additionally
+requires the owner to review and trust the project-local hook through `/hooks`.
+The `Noutify/` folder must stay in its installed position until explicit
+uninstall.
 
 ## Compatibility
 
 | Platform | Current claim |
 | --- | --- |
-| Codex | native unverified until project-local hook trust and later real-turn receipt are recorded |
-| Claude Code | native unverified until real-turn acceptance is recorded |
+| Claude Code | native unverified until a later real-turn receipt is recorded |
+| Codex | native unverified until hook trust and a later real-turn receipt are recorded |
+| Gemini CLI | native unverified until a later real-turn receipt is recorded |
+| GitHub Copilot CLI (local) | native unverified until a later real-turn receipt is recorded; Copilot cloud is unsupported and untested |
+| Windsurf Cascade | native unverified until a later real-turn receipt is recorded |
 | Generic durable-memory agent | memory best effort |
-| Gemini CLI, GitHub Copilot CLI, Windsurf | unsupported or untested until Plan 2 |
-| Other agents | unsupported or untested without a validated adapter or memory path |
+| Cursor, OpenCode, Cline, and other unsupported surfaces | unsupported or untested |
 
-Native adapters presently implemented in Plan 1 are Codex and Claude Code.
-Gemini CLI, GitHub Copilot CLI, and Windsurf identifiers are reserved but their
-native installation is deferred to Plan 2. Do not claim automatic notification
-support for every agent.
+Native adapters exist for Claude Code `Stop`, Codex `Stop`, Gemini CLI
+`AfterAgent`, local GitHub Copilot CLI `agentStop`, and Windsurf
+`post_cascade_response`. No real-device automatic-receipt gate has yet been
+recorded for any of them, so none may be described as native verified.
 
 ## Rules that cannot change silently
 
@@ -88,9 +88,12 @@ support for every agent.
 
 ## Roadmap
 
-Plan 1 supplies the minimal artifact, multi-agent configuration, Codex and
-Claude Code adapters, generic memory fallback, transactionality, confirmation,
-diagnostics, and packaging. Plan 2 may add and verify native adapters for
-Gemini CLI, local GitHub Copilot CLI, and Windsurf. Future work may add other
-providers, operating systems, a package distribution channel, richer event
-types, or a stable public API only after separate approval and validation.
+Plan 1 supplied the minimal artifact, multi-agent configuration, Claude Code
+and Codex adapters, generic memory fallback, transactionality, confirmation,
+diagnostics, and packaging. Plan 2 adds deterministic project-local adapters
+for Gemini CLI, local GitHub Copilot CLI, and Windsurf. A native adapter moves
+to `native verified` only after its supported platform performs a real later
+turn, the owner explicitly confirms phone receipt, and the recorded acceptance
+is visible through `doctor`. Future work may add other providers, operating
+systems, a package distribution channel, richer event types, or a stable public
+API only after separate approval and validation.

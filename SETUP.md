@@ -1,61 +1,93 @@
 # Noutify installation contract
 
-Use this contract from the target project's root. Do not read, print, or ask
-for `.noutify.local.json`.
+Use this contract from the target project's root. Keep `Noutify/` in that
+location after setup. Do not read, print, request, or copy
+`.noutify.local.json`.
 
-1. Use the user's latest clear request language, then their established
-   conversation language, then the operating-system UI language, then English.
-   Select `es` for Spanish. For every other interaction language select `en`
-   and explain, in that language, that notifications will be in English. Never
-   translate commands, paths, or JSON.
-2. Detect and propose the current platform, but ask: “Which agents will use
-   Noutify in this project?” The user may select `codex`, `claude-code`, or
-   `generic:<lowercase-agent-name>`, including multiple selections.
-3. For a generic agent, ask for its durable project-memory file. If known, add
-   `--memory-link generic:<name>=<project-relative-file>`; otherwise continue
-   without it and report pending, best-effort integration. Never guess a path.
-4. Run the installer with explicit selections, for example:
+1. Choose the user's latest clear request language; otherwise use their
+   established conversation language, then the operating-system UI language,
+   then English. Select `es` for Spanish. For every other language select `en`
+   and explain, in the interaction language, that notifications will be in
+   English. Never translate commands, paths, JSON, or agent identifiers.
+2. Detect and propose the current platform, then ask: “Which agents will use
+   Noutify in this project?” The user may choose one or more native IDs:
+   `claude-code`, `codex`, `gemini-cli`, `copilot-cli`, and `windsurf`.
+   Detection is advisory; do not install an integration without an explicit
+   selection. `copilot-cli` means the local CLI only, never Copilot cloud.
+3. For another platform with durable project instructions, use
+   `generic:<lowercase-agent-name>`. Ask for its real project-relative memory
+   file and add a matching `--memory-link`; otherwise continue without it and
+   report a pending, best-effort integration. Never guess a file path.
+4. Run the installer with explicit, repeatable selections. For example:
 
    ```text
    node Noutify/install.mjs --language es --agent codex --agent claude-code
    ```
 
-   A generic memory link looks like:
+   To install all native adapters together:
+
+   ```text
+   node Noutify/install.mjs --language en --agent claude-code --agent codex --agent gemini-cli --agent copilot-cli --agent windsurf
+   ```
+
+   A generic-memory selection looks like:
 
    ```text
    node Noutify/install.mjs --language en --agent generic:cursor --memory-link generic:cursor=AGENTS.md
    ```
 
-   Read only the final JSON record. For `created`, display its topic once,
-   explain that it is a private notification key, and never repeat it in text,
-   files, logs, or summaries. For `existing`, never display a topic.
-5. Ask the owner to subscribe their ntfy app and pause for confirmation. Then run:
+   Read only the final JSON record. If it says `created`, display its topic
+   once, explain that it is a private notification key, and do not repeat it in
+   text, files, logs, or summaries. If it says `existing`, never display a
+   topic.
+5. Ask the owner to subscribe their ntfy app, then run:
 
    ```text
    node Noutify/dist/cli.js test
    ```
 
-   Wait for explicit receipt of the localized manual test, then run:
+   Wait for explicit receipt of the localized manual test. Only then run:
 
    ```text
    node Noutify/dist/cli.js confirm
    node Noutify/dist/cli.js doctor
    ```
 
-6. For Codex, have the owner review and trust the project-local hook through
-   `/hooks`. Do not bypass trust. Finish a later real turn, wait for explicit
-   automatic receipt, then run:
+6. Complete the selected platform's native acceptance below. Reload or restart
+   the platform after it notices the project configuration, finish a later real
+   turn, wait for the owner's explicit automatic-phone receipt, then run:
 
    ```text
-   node Noutify/dist/cli.js confirm-agent codex
+   node Noutify/dist/cli.js confirm-agent <agent-id>
    node Noutify/dist/cli.js doctor
    ```
 
-   Manual and automatic receipts are separate gates. For Claude Code, repeat
-   the real-turn receipt and `confirm-agent claude-code` flow. Generic memory
-   is best effort; confirm it only after the owner sees an automatic receipt.
+   `confirm` proves the phone channel only. `confirm-agent` records a separate
+   real automatic receipt for one selected adapter.
 
-Keep the `Noutify/` folder in place. Its project-local integrations call its
-compiled runtime. Read [troubleshooting](docs/setup-troubleshooting.md) only
-for recovery. Gemini CLI, GitHub Copilot CLI, and Windsurf are not installable
-native adapters in this release.
+## Native-platform acceptance
+
+| Agent ID | Project-local integration | Lifecycle event | Owner action before real-turn acceptance |
+| --- | --- | --- | --- |
+| `claude-code` | `.claude/settings.local.json` plus the Noutify project skill | `Stop` | Reload Claude Code so it reads the project hook and skill. |
+| `codex` | `.codex/hooks.json` | `Stop` | Open `/hooks`, review the project-local Noutify command hook, and trust it. Do not bypass trust. |
+| `gemini-cli` | `.gemini/settings.json` | `AfterAgent` | Reload Gemini CLI after it reads the project settings. |
+| `copilot-cli` | `.github/copilot/settings.local.json` | `agentStop` | Use local GitHub Copilot CLI and reload its project settings. Copilot cloud is unsupported and untested. |
+| `windsurf` | `.windsurf/hooks.json` | `post_cascade_response` | Reload Windsurf Cascade after it reads the project hook. |
+
+Every native adapter remains **native unverified** until the manual phone gate,
+the platform-specific trust or reload action, a real later turn, the owner's
+explicit automatic receipt, `confirm-agent <agent-id>`, and a clean `doctor`
+have all occurred. An installed file, process exit, or provider response is not
+proof of delivery.
+
+## Other agents
+
+`generic:<agent-name>` is memory best effort, not a lifecycle hook. It can be
+used for durable project-memory agents only after the owner identifies the
+memory file. Cursor, OpenCode, and Cline have no native adapter in this release;
+do not describe them as automatically supported or native verified.
+
+For exact platform hook behavior, use the linked official references in
+[README.md](README.md#official-platform-references). Read
+[troubleshooting](docs/setup-troubleshooting.md) only for recovery.
