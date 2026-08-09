@@ -631,6 +631,82 @@ describe("runCli", () => {
     expect(output.stderr).toEqual([]);
   });
 
+  it.each([
+    [
+      "native",
+      '{"stopReason":"end_turn","stop_hook_active":false,"prompt":"private prompt","transcriptPath":"C:/private/transcript.jsonl"}',
+      false,
+      1,
+    ],
+    [
+      "VS Code compatible",
+      '{"hook_event_name":"Stop","stop_reason":"end_turn","stop_hook_active":false}',
+      false,
+      1,
+    ],
+    ["recursive", '{"stopReason":"end_turn","stop_hook_active":true}', false, 0],
+    ["mixed", '{"stopReason":"end_turn","hook_event_name":"BeforeTool"}', false, 0],
+    ["malformed", "not-json", false, 0],
+    ["send failure", '{"stopReason":"end_turn"}', true, 1],
+  ])(
+    "returns Copilot's exact empty-object response for a %s hook path",
+    async (_label, input, rejectSend, expectedAttempts) => {
+      const root = await temporaryProject();
+      let sendAttempts = 0;
+      const dependencies = {
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+        send: async () => {
+          sendAttempts += 1;
+          if (rejectSend) throw new Error("provider unavailable");
+          return { ok: true, attempts: 1 } as const;
+        },
+      };
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "private_topic_1234567890",
+          "--agent",
+          "copilot-cli",
+        ],
+        memoryIo().io,
+        dependencies,
+      );
+      await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+      const hookIo = memoryIo(input);
+
+      expect(
+        await runCli(
+          ["hook", "copilot-agent-stop", "--project", root],
+          hookIo.io,
+          dependencies,
+        ),
+      ).toBe(0);
+      expect(sendAttempts).toBe(expectedAttempts);
+      expect(hookIo.stdout).toEqual(["{}"]);
+      expect(hookIo.stderr).toEqual([]);
+      expect(hookIo.stdout.join("\n")).not.toContain("private_topic_1234567890");
+      expect(hookIo.stdout.join("\n")).not.toContain("transcript");
+    },
+  );
+
+  it("returns Copilot's exact response even when its arguments or project are invalid", async () => {
+    for (const argv of [
+      ["hook", "copilot-agent-stop", "--project"],
+      ["hook", "copilot-agent-stop", "--unknown", "value"],
+      ["hook", "copilot-agent-stop", "unexpected"],
+      ["hook", "copilot-agent-stop", "--project", "C:/missing"],
+    ]) {
+      const output = memoryIo('{"stopReason":"end_turn"}');
+      expect(await runCli(argv, output.io)).toBe(0);
+      expect(output.stdout).toEqual(["{}"]);
+      expect(output.stderr).toEqual([]);
+    }
+  });
+
   it("passes stored Spanish language to the silent Stop hook", async () => {
     const root = await temporaryProject();
     const sent: Notification[] = [];

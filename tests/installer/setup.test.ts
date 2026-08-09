@@ -557,11 +557,11 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(
       setupProject({
         projectRoot: root,
-        agents: ["copilot-cli"],
+        agents: ["windsurf"],
         nodePath: "C:/node.exe",
         cliPath: "C:/noutify/dist/cli.js",
       }),
-    ).rejects.toThrow("native adapter is not available: copilot-cli");
+    ).rejects.toThrow("native adapter is not available: windsurf");
 
     await expect(readFile(settingsPath, "utf8")).resolves.toBe("not-json\n");
     await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({

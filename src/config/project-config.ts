@@ -344,6 +344,13 @@ export async function readProjectConfig(
 }
 
 export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
+  await ensureIgnoreRules(projectRoot, [PRIVATE_CONFIG_FILE]);
+}
+
+export async function ensureIgnoreRules(
+  projectRoot: string,
+  rules: readonly string[],
+): Promise<void> {
   const ignorePath = join(projectRoot, ".gitignore");
   await assertSafeProjectPath(projectRoot, ignorePath);
   const existing = await readFile(ignorePath, "utf8").catch(
@@ -358,15 +365,23 @@ export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
       throw error;
     },
   );
-  const lines = existing.split(/\r?\n/);
-  if (lines.includes(PRIVATE_CONFIG_FILE)) {
-    return;
+  const lines = new Set(existing.split(/\r?\n/));
+  const missing: string[] = [];
+  for (const rule of rules) {
+    if (!rule || /[\r\n]/.test(rule)) {
+      throw new Error("gitignore rule must be one non-empty line");
+    }
+    if (!lines.has(rule)) {
+      lines.add(rule);
+      missing.push(rule);
+    }
   }
+  if (missing.length === 0) return;
 
   const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
   await writeTextAtomic(
     projectRoot,
     ignorePath,
-    `${existing}${prefix}${PRIVATE_CONFIG_FILE}\n`,
+    `${existing}${prefix}${missing.join("\n")}\n`,
   );
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createInitialConfig,
+  ensureIgnoreRules,
   ensurePrivateIgnore,
   readProjectConfig,
   validateProjectConfig,
@@ -208,6 +209,25 @@ describe("project configuration", () => {
       .split(/\r?\n/)
       .filter((line) => line === ".noutify.local.json");
     expect(lines).toEqual([".noutify.local.json"]);
+  });
+
+  it("appends missing exact ignore rules once without changing existing bytes", async () => {
+    const root = await temporaryProject();
+    const ignorePath = join(root, ".gitignore");
+    await writeFile(ignorePath, "dist/\r\n.noutify.local.json\r\n", "utf8");
+
+    await ensureIgnoreRules(root, [
+      ".noutify.local.json",
+      "/.github/copilot/settings.local.json",
+      "/.github/copilot/settings.local.json",
+    ]);
+
+    const expected =
+      "dist/\r\n.noutify.local.json\r\n/.github/copilot/settings.local.json\n";
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe(expected);
+
+    await ensureIgnoreRules(root, ["/.github/copilot/settings.local.json"]);
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe(expected);
   });
 
   it("rejects a short or unsafe topic before writing files", async () => {

@@ -8,6 +8,7 @@ import { normalizeNotificationLanguage } from "./config/language.js";
 import { parseAgentId } from "./config/integrations.js";
 import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
 import { parseCodexStopPayload } from "./agents/codex/stop.js";
+import { parseCopilotAgentStopPayload } from "./agents/copilot-cli/agent-stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
 import { parseGeminiAfterAgentPayload } from "./agents/gemini-cli/after-agent.js";
 import type { Notification } from "./core/types.js";
@@ -248,6 +249,33 @@ async function runGeminiAfterAgentHook(
   return 0;
 }
 
+async function runCopilotAgentStopHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runWaitingHook(input, {
+      agent: "copilot-cli",
+      projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: parseCopilotAgentStopPayload,
+      send: (notification) => sender(notification, bundle.private),
+    });
+  } catch {
+    // Copilot hooks must remain silent and non-blocking under every failure mode.
+  } finally {
+    io.writeStdout("{}");
+  }
+  return 0;
+}
+
 async function runGenericWaitingNotification(
   projectRoot: string,
   agentValue: string | undefined,
@@ -288,6 +316,10 @@ export async function runCli(
     parsed = parseArguments(argv);
     validateOptions(parsed);
   } catch (error) {
+    if (argv[0] === "hook" && argv[1] === "copilot-agent-stop") {
+      io.writeStdout("{}");
+      return 0;
+    }
     if (argv[0] === "hook" || argv[0] === "notify") {
       return 0;
     }
@@ -413,6 +445,9 @@ export async function runCli(
         }
         if (parsed.subcommand === "gemini-after-agent") {
           return runGeminiAfterAgentHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "copilot-agent-stop") {
+          return runCopilotAgentStopHook(projectRoot, io, runtime.send);
         }
         return 0;
       case "notify":
