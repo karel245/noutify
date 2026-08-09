@@ -356,7 +356,7 @@ export async function runCli(
         if (agent === undefined) {
           throw new Error("confirm-agent requires exactly one agent");
         }
-        await confirmAgent(projectRoot, agent);
+        await confirmAgent(projectRoot, agent, runtime);
         io.writeStdout(`Automatic receipt confirmed for ${parseAgentId(agent)}.`);
         return 0;
       }

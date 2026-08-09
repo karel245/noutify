@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   PRIVATE_CONFIG_FILE,
@@ -336,15 +337,94 @@ export async function confirmProject(projectRoot: string): Promise<void> {
 export async function confirmAgent(
   projectRoot: string,
   agentValue: string,
+  runtime?: RuntimePaths,
 ): Promise<void> {
   const root = resolve(projectRoot);
   const agent = parseAgentId(agentValue);
   const bundle = await readProjectConfig(root);
-  if (!bundle.public.integrations.some((entry) => entry.agent === agent)) {
+  const integration = bundle.public.integrations.find(
+    (entry) => entry.agent === agent,
+  );
+  if (integration === undefined) {
     throw new Error(`agent integration is not selected: ${agent}`);
+  }
+  const adapter = adapterFromIntegration(integration);
+  const context: AdapterContext = {
+    projectRoot: root,
+    runtime: runtime ?? await inferInstalledRuntime(root, adapter),
+  };
+  const inspection = await adapter.inspect(context).catch(() => ({
+    installed: false,
+    detail: "integration inspection failed",
+  }));
+  if (!inspection.installed) {
+    throw new Error(`agent integration is not installed: ${agent}`);
   }
   bundle.private.automaticReceipts[agent] = true;
   await writeProjectConfig(root, bundle);
+}
+
+async function inferInstalledRuntime(
+  projectRoot: string,
+  adapter: AgentAdapter,
+): Promise<RuntimePaths> {
+  const fallback = {
+    nodePath: process.execPath,
+    cliPath: resolve(dirname(fileURLToPath(import.meta.url)), "..", "cli.js"),
+  };
+  if (adapter.id.startsWith("generic:") || adapter.publicPath === undefined) {
+    return fallback;
+  }
+
+  const value = await readFile(join(projectRoot, adapter.publicPath), "utf8")
+    .then((contents) => JSON.parse(contents) as unknown)
+    .catch(() => undefined);
+  const subcommand = adapter.id === "claude-code"
+    ? "claude-stop"
+    : adapter.id === "codex"
+      ? "codex-stop"
+      : undefined;
+  if (value === undefined || subcommand === undefined) return fallback;
+
+  const candidates = new Map<string, RuntimePaths>();
+  collectRuntimeCandidates(value, projectRoot, subcommand, candidates);
+  return candidates.size === 1 ? [...candidates.values()][0] ?? fallback : fallback;
+}
+
+function collectRuntimeCandidates(
+  value: unknown,
+  projectRoot: string,
+  subcommand: string,
+  candidates: Map<string, RuntimePaths>,
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectRuntimeCandidates(entry, projectRoot, subcommand, candidates);
+    }
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+
+  const entry = value as Record<string, unknown>;
+  if (
+    typeof entry.command === "string" &&
+    isAbsolute(entry.command) &&
+    Array.isArray(entry.args) &&
+    entry.args.length === 5 &&
+    typeof entry.args[0] === "string" &&
+    isAbsolute(entry.args[0]) &&
+    entry.args[1] === "hook" &&
+    entry.args[2] === subcommand &&
+    entry.args[3] === "--project" &&
+    typeof entry.args[4] === "string" &&
+    resolve(entry.args[4]) === projectRoot
+  ) {
+    const runtime = { nodePath: entry.command, cliPath: entry.args[0] };
+    candidates.set(`${runtime.nodePath}\0${runtime.cliPath}`, runtime);
+  }
+  for (const child of Object.values(entry)) {
+    collectRuntimeCandidates(child, projectRoot, subcommand, candidates);
+  }
 }
 
 export async function doctorProject(

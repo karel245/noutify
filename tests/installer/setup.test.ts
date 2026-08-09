@@ -663,6 +663,42 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(readFile(privatePath)).resolves.toEqual(before);
   });
 
+  it("rejects confirmation for a selected pending memory integration without changing config bytes", async () => {
+    const root = await temporaryProject();
+    await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    });
+    const privatePath = join(root, ".noutify.local.json");
+    const before = await readFile(privatePath);
+
+    await expect(confirmAgent(root, "generic:cursor")).rejects.toThrow(
+      "agent integration is not installed: generic:cursor",
+    );
+
+    await expect(readFile(privatePath)).resolves.toEqual(before);
+  });
+
+  it("rejects confirmation for a selected missing native integration without changing config bytes", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({ projectRoot: root, agents: ["codex"], ...runtime });
+    await rm(join(root, ".codex", "hooks.json"));
+    const privatePath = join(root, ".noutify.local.json");
+    const before = await readFile(privatePath);
+
+    await expect(confirmAgent(root, "codex")).rejects.toThrow(
+      "agent integration is not installed: codex",
+    );
+
+    await expect(readFile(privatePath)).resolves.toEqual(before);
+  });
+
   it("keeps a deselected installed adapter and its configuration unchanged", async () => {
     const root = await temporaryProject();
     const runtime = {
