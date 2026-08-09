@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 
 import { readProjectConfig } from "./config/project-config.js";
 import { normalizeNotificationLanguage } from "./config/language.js";
-import { handleClaudeStop } from "./agents/claude-code/stop.js";
+import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
+import { runWaitingHook } from "./agents/waiting-hook.js";
 import type { Notification } from "./core/types.js";
 import {
   confirmProject,
@@ -56,14 +57,14 @@ const defaultIo: CliIo = {
   writeStderr: (text) => process.stderr.write(`${text}\n`),
 };
 
-interface ParsedArguments {
+export interface ParsedArguments {
   command: string;
   subcommand?: string;
   operands: string[];
-  options: Map<string, string>;
+  options: Map<string, string[]>;
 }
 
-function parseArguments(argv: string[]): ParsedArguments {
+export function parseArguments(argv: string[]): ParsedArguments {
   const [command = "--help", ...tokens] = argv;
   let subcommand: string | undefined;
   let argumentTokens = tokens;
@@ -73,7 +74,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     argumentTokens = tokens.slice(1);
   }
 
-  const options = new Map<string, string>();
+  const options = new Map<string, string[]>();
   const operands: string[] = [];
   for (let index = 0; index < argumentTokens.length; index += 1) {
     const token = argumentTokens[index];
@@ -86,7 +87,10 @@ function parseArguments(argv: string[]): ParsedArguments {
     if (value === undefined || value.startsWith("--")) {
       throw new Error(`invalid option near ${token}`);
     }
-    options.set(token.slice(2), value);
+    const name = token.slice(2);
+    const occurrences = options.get(name) ?? [];
+    occurrences.push(value);
+    options.set(name, occurrences);
     index += 1;
   }
 
@@ -95,9 +99,16 @@ function parseArguments(argv: string[]): ParsedArguments {
   return parsed;
 }
 
+export function optionValues(
+  parsed: ParsedArguments,
+  name: string,
+): readonly string[] {
+  return parsed.options.get(name) ?? [];
+}
+
 function validateOptions(parsed: ParsedArguments): void {
   const allowedByCommand: Record<string, readonly string[]> = {
-    setup: ["project", "server", "topic", "language", "format"],
+    setup: ["project", "server", "topic", "language", "format", "agent", "memory-link"],
     language: ["project"],
     test: ["project"],
     confirm: ["project"],
@@ -115,7 +126,14 @@ function validateOptions(parsed: ParsedArguments): void {
   if (unexpected !== undefined) {
     throw new Error(`unknown option --${unexpected} for ${parsed.command}`);
   }
-  if (parsed.command === "setup" && parsed.options.get("format") !== undefined && parsed.options.get("format") !== "json") {
+  const repeatableOptions = new Set(["agent", "memory-link"]);
+  const duplicate = [...parsed.options.entries()].find(
+    ([option, values]) => !repeatableOptions.has(option) && values.length > 1,
+  );
+  if (duplicate !== undefined) {
+    throw new Error(`duplicate option --${duplicate[0]} for ${parsed.command}`);
+  }
+  if (parsed.command === "setup" && optionValues(parsed, "format")[0] !== undefined && optionValues(parsed, "format")[0] !== "json") {
     throw new Error("setup format must be json");
   }
   if (parsed.command === "language") {
@@ -145,12 +163,13 @@ async function runClaudeStopHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    if (!bundle.private.setupCompleted || !bundle.public.events.waiting) {
-      return 0;
-    }
-    await handleClaudeStop(input, {
+    await runWaitingHook(input, {
+      agent: "claude-code",
       projectName: bundle.public.project.name,
       language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: parseClaudeStopPayload,
       send: (notification) => sender(notification, bundle.private),
     });
   } catch {
@@ -177,7 +196,7 @@ export async function runCli(
   }
 
   const runtime = phaseZeroDependencies(dependencies);
-  const projectRoot = resolve(parsed.options.get("project") ?? process.cwd());
+  const projectRoot = resolve(optionValues(parsed, "project")[0] ?? process.cwd());
 
   try {
     switch (parsed.command) {
@@ -192,14 +211,14 @@ export async function runCli(
           nodePath: runtime.nodePath,
           cliPath: runtime.cliPath,
         };
-        const server = parsed.options.get("server");
-        const topic = parsed.options.get("topic");
-        const language = parsed.options.get("language");
+        const server = optionValues(parsed, "server")[0];
+        const topic = optionValues(parsed, "topic")[0];
+        const language = optionValues(parsed, "language")[0];
         if (server !== undefined) input.server = server;
         if (topic !== undefined) input.topic = topic;
         if (language !== undefined) input.language = normalizeNotificationLanguage(language);
         const result = await setupProject(input);
-        if (parsed.options.get("format") === "json") {
+        if (optionValues(parsed, "format")[0] === "json") {
           io.writeStdout(JSON.stringify(
             result.created
               ? {

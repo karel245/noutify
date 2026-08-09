@@ -11,7 +11,7 @@ import {
 } from "../src/config/project-config.js";
 import { uninstallClaudeStopHook } from "../src/installer/claude-settings.js";
 import { buildClaudeHookCommand } from "../src/installer/setup.js";
-import { runCli } from "../src/cli.js";
+import { optionValues, parseArguments, runCli } from "../src/cli.js";
 
 const temporaryRoots: string[] = [];
 
@@ -44,6 +44,31 @@ function memoryIo(input = "") {
 }
 
 describe("runCli", () => {
+  it("preserves repeated agent options in occurrence order for future setup selection", () => {
+    const parsed = parseArguments([
+      "setup",
+      "--agent",
+      "codex",
+      "--agent",
+      "claude-code",
+    ]);
+
+    expect(parsed.options.get("agent")).toEqual(["codex", "claude-code"]);
+    expect(optionValues(parsed, "agent")).toEqual(["codex", "claude-code"]);
+  });
+
+  it("rejects duplicate single-value options instead of silently overwriting one", async () => {
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        ["doctor", "--project", "C:/first", "--project", "C:/second"],
+        output.io,
+      ),
+    ).toBe(1);
+    expect(output.stderr).toEqual(["duplicate option --project for doctor"]);
+  });
+
   it("routes the complete Phase 0 command lifecycle", async () => {
     const root = await temporaryProject();
     const topic = "private_topic_1234567890";
