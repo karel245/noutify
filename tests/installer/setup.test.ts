@@ -87,6 +87,54 @@ describe("Phase 0 setup lifecycle", () => {
     ]);
   });
 
+  it("installs only Codex files for a Codex-only selection", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["codex"],
+      ...runtime,
+    });
+
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "codex", mode: "native", path: ".codex/hooks.json" },
+    ]);
+    await expect(
+      readFile(join(root, ".codex", "hooks.json"), "utf8"),
+    ).resolves.toContain("codex-stop");
+    await expect(
+      access(join(root, ".claude", "settings.local.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("installs each selected native adapter exactly once", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["claude-code", "codex"],
+      ...runtime,
+    });
+
+    const claude = await readFile(
+      join(root, ".claude", "settings.local.json"),
+      "utf8",
+    );
+    const codex = await readFile(join(root, ".codex", "hooks.json"), "utf8");
+    expect(claude.match(/claude-stop/g)).toHaveLength(1);
+    expect(codex.match(/codex-stop/g)).toHaveLength(1);
+  });
+
   it("rejects an explicitly empty agent selection before writing", async () => {
     const root = await temporaryProject();
     const ignorePath = join(root, ".gitignore");
@@ -108,7 +156,7 @@ describe("Phase 0 setup lifecycle", () => {
     });
   });
 
-  it("rejects a deferred native adapter before snapshots or writes", async () => {
+  it("rejects an unimplemented native adapter before snapshots or writes", async () => {
     const root = await temporaryProject();
     const settingsPath = join(root, ".claude", "settings.local.json");
     await mkdir(join(root, ".claude"), { recursive: true });
@@ -117,11 +165,11 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(
       setupProject({
         projectRoot: root,
-        agents: ["codex"],
+        agents: ["gemini-cli"],
         nodePath: "C:/node.exe",
         cliPath: "C:/noutify/dist/cli.js",
       }),
-    ).rejects.toThrow("native adapter is not available: codex");
+    ).rejects.toThrow("native adapter is not available: gemini-cli");
 
     await expect(readFile(settingsPath, "utf8")).resolves.toBe("not-json\n");
     await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({

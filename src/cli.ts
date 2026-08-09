@@ -7,6 +7,7 @@ import { readProjectConfig } from "./config/project-config.js";
 import { normalizeNotificationLanguage } from "./config/language.js";
 import { parseAgentId } from "./config/integrations.js";
 import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
+import { parseCodexStopPayload } from "./agents/codex/stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
 import type { Notification } from "./core/types.js";
 import {
@@ -179,6 +180,31 @@ async function runClaudeStopHook(
   return 0;
 }
 
+async function runCodexStopHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runWaitingHook(input, {
+      agent: "codex",
+      projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: parseCodexStopPayload,
+      send: (notification) => sender(notification, bundle.private),
+    });
+  } catch {
+    // Internal hooks must be silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
 export async function runCli(
   argv: string[],
   io: CliIo = defaultIo,
@@ -295,6 +321,9 @@ export async function runCli(
       case "hook":
         if (parsed.subcommand === "claude-stop") {
           return runClaudeStopHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "codex-stop") {
+          return runCodexStopHook(projectRoot, io, runtime.send);
         }
         return 0;
       default:

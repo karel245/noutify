@@ -1,5 +1,6 @@
 import type { NativeAgentId } from "../config/integrations.js";
 import { claudeCodeAdapter } from "./adapters/claude-code.js";
+import { codexAdapter } from "./adapters/codex.js";
 
 export interface RuntimePaths {
   nodePath: string;
@@ -34,6 +35,9 @@ export interface AgentAdapter {
 export function nativeAdapter(id: NativeAgentId): AgentAdapter {
   if (id === "claude-code") {
     return claudeCodeAdapter;
+  }
+  if (id === "codex") {
+    return codexAdapter;
   }
   throw new Error(`native adapter is not available: ${id}`);
 }

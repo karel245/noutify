@@ -87,9 +87,12 @@ describe("runCli", () => {
         output.io,
         { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
       ),
-    ).toBe(1);
-    expect(output.stderr).toEqual(["native adapter is not available: codex"]);
-    await expect(readProjectConfig(root)).rejects.toBeDefined();
+    ).toBe(0);
+    expect(output.stderr).toEqual([]);
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "claude-code", mode: "native", path: ".claude/settings.local.json" },
+      { agent: "codex", mode: "native", path: ".codex/hooks.json" },
+    ]);
   });
 
   it("routes the complete Phase 0 command lifecycle", async () => {
@@ -214,6 +217,110 @@ describe("runCli", () => {
     );
 
     expect(exitCode).toBe(0);
+    expect(hookIo.stdout).toEqual([]);
+    expect(hookIo.stderr).toEqual([]);
+  });
+
+  it("routes a confirmed Codex Stop event through the same silent dispatcher", async () => {
+    const root = await temporaryProject();
+    const sent: Notification[] = [];
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async (notification: Notification) => {
+        sent.push(notification);
+        return { ok: true, attempts: 1 } as const;
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "codex",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const hookIo = memoryIo('{"hook_event_name":"Stop","stop_hook_active":false}');
+
+    expect(
+      await runCli(
+        ["hook", "codex-stop", "--project", root],
+        hookIo.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(sent).toHaveLength(1);
+    expect(hookIo.stdout).toEqual([]);
+    expect(hookIo.stderr).toEqual([]);
+  });
+
+  it("suppresses recursive Codex Stop events without writing output", async () => {
+    const root = await temporaryProject();
+    let sends = 0;
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async () => {
+        sends += 1;
+        return { ok: true, attempts: 1 } as const;
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "codex",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const hookIo = memoryIo('{"hook_event_name":"Stop","stop_hook_active":true}');
+
+    await runCli(["hook", "codex-stop", "--project", root], hookIo.io, dependencies);
+    expect(sends).toBe(0);
+    expect(hookIo.stdout).toEqual([]);
+    expect(hookIo.stderr).toEqual([]);
+  });
+
+  it("keeps a failing Codex notification delivery silent", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async () => {
+        throw new Error("provider unavailable");
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "codex",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const hookIo = memoryIo('{"hook_event_name":"Stop"}');
+
+    await expect(
+      runCli(["hook", "codex-stop", "--project", root], hookIo.io, dependencies),
+    ).resolves.toBe(0);
     expect(hookIo.stdout).toEqual([]);
     expect(hookIo.stderr).toEqual([]);
   });

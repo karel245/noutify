@@ -24,9 +24,19 @@ describe("native agent adapter registry", () => {
     ]);
   });
 
-  it("rejects deferred native adapters through the registry", () => {
-    expect(() => nativeAdapter("codex")).toThrow(
-      "native adapter is not available: codex",
-    );
+  it("exposes Codex's isolated project hook ownership boundary", () => {
+    const adapter = nativeAdapter("codex");
+    const context = {
+      projectRoot: "C:/projects/demo",
+      runtime: {
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      },
+    };
+
+    expect(adapter.id).toBe("codex");
+    expect(adapter.mode).toBe("native");
+    expect(adapter.publicPath).toBe(".codex/hooks.json");
+    expect(adapter.ownedPaths(context)).toEqual([".codex/hooks.json"]);
   });
 });
