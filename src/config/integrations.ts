@@ -44,6 +44,7 @@ export function normalizeIntegrations(
   values: readonly IntegrationConfig[],
 ): IntegrationConfig[] {
   const agents = new Set<AgentId>();
+  const platformIdentities = new Map<string, AgentId>();
   const normalized = values.map((value) => {
     if (!isRecord(value)) {
       throw new Error("integration must be an object");
@@ -71,7 +72,17 @@ export function normalizeIntegrations(
     if (agents.has(agent)) {
       throw new Error(`duplicate integration agent: ${agent}`);
     }
+    const platformIdentity = agent.startsWith("generic:")
+      ? agent.slice("generic:".length)
+      : agent;
+    const existingTrigger = platformIdentities.get(platformIdentity);
+    if (existingTrigger !== undefined && existingTrigger !== agent) {
+      throw new Error(
+        `multiple trigger modes for platform identity: ${platformIdentity}`,
+      );
+    }
     agents.add(agent);
+    platformIdentities.set(platformIdentity, agent);
     return value.path === undefined
       ? { agent, mode: value.mode }
       : { agent, mode: value.mode, path: value.path };

@@ -17,6 +17,7 @@ import {
 } from "node:path";
 
 import { parseAgentId, type AgentId } from "../config/integrations.js";
+import { assertSafeProjectPath } from "../core/project-path.js";
 import type { RuntimePaths } from "./agent-adapter.js";
 import { restoreFileSnapshots, snapshotFiles } from "./file-snapshot.js";
 
@@ -157,6 +158,7 @@ async function validateTextTarget(
   if (back === "" || back === ".." || back.startsWith(`..\\`) || isAbsolute(back)) {
     throw new Error(`${label} must remain inside the project`);
   }
+  await assertSafeProjectPath(projectRoot, absolutePath);
 
   const rootStat = await lstat(root);
   if (rootStat.isSymbolicLink()) throw new Error(`${label} crosses a symbolic link`);
@@ -237,13 +239,23 @@ function installedReference(contents: string, agent: AgentId): boolean {
   throw new Error(`memory file contains a modified owned block for ${agent}`);
 }
 
-async function writeAtomic(path: string, contents: string): Promise<void> {
+async function writeAtomic(
+  projectRoot: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  await assertSafeProjectPath(projectRoot, path);
   await mkdir(dirname(path), { recursive: true });
+  await assertSafeProjectPath(projectRoot, path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await writeFile(temporaryPath, contents, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await assertSafeProjectPath(projectRoot, path);
     await rename(temporaryPath, path);
   } finally {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await unlink(temporaryPath).catch((error: unknown) => {
       if (!isMissing(error)) throw error;
     });
@@ -309,20 +321,20 @@ export async function installMemoryIntegration(
 
   const paths = [instruction.absolutePath];
   if (memory !== undefined) paths.push(memory.absolutePath);
-  const snapshots = await snapshotFiles(paths);
+  const snapshots = await snapshotFiles(projectRoot, paths);
   try {
     if (instructionChanged) {
-      await writeAtomic(instruction.absolutePath, expectedInstruction);
+      await writeAtomic(projectRoot, instruction.absolutePath, expectedInstruction);
     }
     if (memoryChanged && memory !== undefined) {
       const block = referenceBlock(agent);
       const next = memory.contents === null || memory.contents.length === 0
         ? block
         : `${memory.contents}\n\n${block}`;
-      await writeAtomic(memory.absolutePath, next);
+      await writeAtomic(projectRoot, memory.absolutePath, next);
     }
   } catch (error) {
-    await restoreFileSnapshots(snapshots);
+    await restoreFileSnapshots(projectRoot, snapshots);
     throw error;
   }
   return { changed: true, pending: memory === undefined };
@@ -399,14 +411,17 @@ export async function uninstallMemoryIntegration(
 
   const paths = [instruction.absolutePath];
   if (memory !== undefined) paths.push(memory.absolutePath);
-  const snapshots = await snapshotFiles(paths);
+  const snapshots = await snapshotFiles(projectRoot, paths);
   try {
-    if (removeInstruction) await unlink(instruction.absolutePath);
+    if (removeInstruction) {
+      await assertSafeProjectPath(projectRoot, instruction.absolutePath);
+      await unlink(instruction.absolutePath);
+    }
     if (nextMemory !== undefined && memory !== undefined) {
-      await writeAtomic(memory.absolutePath, nextMemory);
+      await writeAtomic(projectRoot, memory.absolutePath, nextMemory);
     }
   } catch (error) {
-    await restoreFileSnapshots(snapshots);
+    await restoreFileSnapshots(projectRoot, snapshots);
     throw error;
   }
   return { changed: true };

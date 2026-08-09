@@ -3,6 +3,7 @@ import { constants, copyFile, mkdir, readFile, rename, unlink, writeFile } from 
 import { dirname, join } from "node:path";
 
 import { CLAUDE_HOOK_TIMEOUT_MS } from "../core/runtime-policy.js";
+import { assertSafeProjectPath } from "../core/project-path.js";
 
 const SETTINGS_RELATIVE_PATH = join(".claude", "settings.local.json");
 
@@ -36,6 +37,7 @@ function isMissingFile(error: unknown): boolean {
 
 async function readSettings(projectRoot: string): Promise<SettingsReadResult> {
   const path = join(projectRoot, SETTINGS_RELATIVE_PATH);
+  await assertSafeProjectPath(projectRoot, path);
   let text: string;
   try {
     text = await readFile(path, "utf8");
@@ -162,21 +164,33 @@ function currentHandler(hook: ClaudeHookCommand): Record<string, unknown> {
 }
 
 async function writeSettingsAtomic(
+  projectRoot: string,
   path: string,
   value: Record<string, unknown>,
 ): Promise<void> {
+  await assertSafeProjectPath(projectRoot, path);
   await mkdir(dirname(path), { recursive: true });
+  await assertSafeProjectPath(projectRoot, path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await assertSafeProjectPath(projectRoot, path);
     await rename(temporaryPath, path);
   } finally {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await unlink(temporaryPath).catch(() => undefined);
   }
 }
 
-async function backupExistingSettings(path: string): Promise<string> {
+async function backupExistingSettings(
+  projectRoot: string,
+  path: string,
+): Promise<string> {
   const backupPath = `${path}.noutify-backup`;
+  await assertSafeProjectPath(projectRoot, path);
+  await assertSafeProjectPath(projectRoot, backupPath);
   try {
     await copyFile(path, backupPath, constants.COPYFILE_EXCL);
   } catch (error) {
@@ -212,11 +226,12 @@ export async function countClaudeStopHooks(
   );
 }
 
-async function originalContainerShape(settingsPath: string): Promise<{
+async function originalContainerShape(projectRoot: string, settingsPath: string): Promise<{
   hadHooks: boolean;
   hadStop: boolean;
 }> {
   try {
+    await assertSafeProjectPath(projectRoot, `${settingsPath}.noutify-backup`);
     const parsed: unknown = JSON.parse(
       await readFile(`${settingsPath}.noutify-backup`, "utf8"),
     );
@@ -267,9 +282,9 @@ export async function installClaudeStopHook(
   next.hooks = hooks;
 
   const backupPath = settings.exists
-    ? await backupExistingSettings(settings.path)
+    ? await backupExistingSettings(projectRoot, settings.path)
     : null;
-  await writeSettingsAtomic(settings.path, next);
+  await writeSettingsAtomic(projectRoot, settings.path, next);
   return { changed: true, backupPath };
 }
 
@@ -304,7 +319,7 @@ export async function uninstallClaudeStopHook(
     hook,
     legacyCommands,
   );
-  const originalShape = await originalContainerShape(settings.path);
+  const originalShape = await originalContainerShape(projectRoot, settings.path);
 
   if (filteredEntries.length > 0) {
     next.hooks.Stop = filteredEntries;
@@ -317,6 +332,6 @@ export async function uninstallClaudeStopHook(
     delete next.hooks;
   }
 
-  await writeSettingsAtomic(settings.path, next);
+  await writeSettingsAtomic(projectRoot, settings.path, next);
   return { changed: true };
 }

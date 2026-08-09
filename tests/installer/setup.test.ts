@@ -1,4 +1,12 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +35,7 @@ import {
 } from "../../src/installer/setup.js";
 import { createClaudeCodeAdapter } from "../../src/installer/adapters/claude-code.js";
 import { codexAdapter } from "../../src/installer/adapters/codex.js";
+import { createGenericMemoryAdapter } from "../../src/installer/adapters/generic-memory.js";
 import type { AgentAdapter } from "../../src/installer/agent-adapter.js";
 
 const temporaryRoots: string[] = [];
@@ -102,6 +111,144 @@ describe("Phase 0 setup lifecycle", () => {
     ).resolves.toContain("notify waiting --agent generic:cursor");
   });
 
+  it("preserves an installed generic memory path when setup omits a new link", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await writeFile(join(root, "AGENTS.md"), "# Existing\n", "utf8");
+    await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
+      ...runtime,
+    });
+    const memoryBefore = await readFile(join(root, "AGENTS.md"));
+    const instructionBefore = await readFile(
+      join(root, ".noutify", "instructions", "cursor.md"),
+    );
+
+    const result = await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      ...runtime,
+    });
+
+    expect(result.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", status: "installed" },
+    ]);
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", path: "AGENTS.md" },
+    ]);
+    await expect(readFile(join(root, "AGENTS.md"))).resolves.toEqual(memoryBefore);
+    await expect(
+      readFile(join(root, ".noutify", "instructions", "cursor.md")),
+    ).resolves.toEqual(instructionBefore);
+  });
+
+  it("moves an exact generic memory block to a newly selected path", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const oldPath = join(root, "AGENTS.md");
+    const newPath = join(root, "docs", "AI.md");
+    await mkdir(join(root, "docs"));
+    await writeFile(oldPath, "# Old instructions\n", "utf8");
+    await writeFile(newPath, "# New instructions\n", "utf8");
+    await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
+      ...runtime,
+    });
+
+    await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      memoryLinks: [{ agent: "generic:cursor", relativePath: "docs/AI.md" }],
+      ...runtime,
+    });
+
+    await expect(readFile(oldPath, "utf8")).resolves.toBe("# Old instructions\n");
+    await expect(readFile(newPath, "utf8")).resolves.toContain(
+      "<!-- noutify:generic:cursor:start -->",
+    );
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", path: "docs/AI.md" },
+    ]);
+    expect((await doctorProject(root, runtime)).checks).toContainEqual(
+      expect.objectContaining({
+        name: "generic:cursor-integration",
+        status: "pass",
+      }),
+    );
+
+    await uninstallProject(root, runtime);
+    await expect(readFile(oldPath, "utf8")).resolves.toBe("# Old instructions\n");
+    await expect(readFile(newPath, "utf8")).resolves.toBe("# New instructions\n");
+  });
+
+  it("restores old and new memory paths plus native and config bytes when migration fails", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const oldPath = join(root, "AGENTS.md");
+    const newPath = join(root, "NEW.md");
+    await writeFile(oldPath, "# Old instructions\n", "utf8");
+    await writeFile(newPath, "# New instructions\n", "utf8");
+    await setupProject({
+      projectRoot: root,
+      agents: ["generic:cursor"],
+      memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
+      ...runtime,
+    });
+    const trackedPaths = [
+      join(root, ".gitignore"),
+      join(root, "noutify.config.json"),
+      join(root, ".noutify.local.json"),
+      oldPath,
+      newPath,
+      join(root, ".noutify", "instructions", "cursor.md"),
+      join(root, ".codex", "hooks.json"),
+    ];
+    const before = await Promise.all(
+      trackedPaths.map((path) => readFile(path).catch(() => null)),
+    );
+    const generic = createGenericMemoryAdapter("generic:cursor", "NEW.md");
+    let oldPathDuringInstall = "";
+    const failingGeneric: AgentAdapter = {
+      ...generic,
+      install: async (context) => {
+        oldPathDuringInstall = await readFile(oldPath, "utf8");
+        await generic.install(context);
+        throw new Error("migration install failed");
+      },
+    };
+
+    await expect(
+      setupProject(
+        {
+          projectRoot: root,
+          agents: ["codex", "generic:cursor"],
+          memoryLinks: [{ agent: "generic:cursor", relativePath: "NEW.md" }],
+          ...runtime,
+        },
+        { adapters: [failingGeneric] },
+      ),
+    ).rejects.toThrow("migration install failed");
+
+    expect(oldPathDuringInstall).toBe("# Old instructions\n");
+    const after = await Promise.all(
+      trackedPaths.map((path) => readFile(path).catch(() => null)),
+    );
+    expect(after).toEqual(before);
+  });
+
   it("rejects an unsafe generic memory file before writing configuration", async () => {
     const root = await temporaryProject();
     const memoryPath = join(root, "AGENTS.md");
@@ -146,6 +293,126 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it.each([
+    [["codex", "generic:codex"] as const, "codex"],
+    [["claude-code", "generic:claude-code"] as const, "claude-code"],
+  ])("rejects two trigger modes for the %s identity before writing", async (agents, identity) => {
+    const root = await temporaryProject();
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents,
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow(`multiple trigger modes for platform identity: ${identity}`);
+
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".codex"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".claude"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects a selected generic trigger that conflicts with a retained native identity", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({ projectRoot: root, agents: ["codex"], ...runtime });
+    const paths = [
+      join(root, ".gitignore"),
+      join(root, "noutify.config.json"),
+      join(root, ".noutify.local.json"),
+      join(root, ".codex", "hooks.json"),
+    ];
+    const before = await Promise.all(paths.map((path) => readFile(path)));
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents: ["generic:codex"],
+        memoryLinks: [{ agent: "generic:codex", relativePath: "AGENTS.md" }],
+        ...runtime,
+      }),
+    ).rejects.toThrow("multiple trigger modes for platform identity: codex");
+
+    await expect(Promise.all(paths.map((path) => readFile(path)))).resolves.toEqual(before);
+    await expect(access(join(root, "AGENTS.md"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    ["codex" as const, ".codex", "hooks.json"],
+    ["claude-code" as const, ".claude", "settings.local.json"],
+  ])("rejects the %s adapter through a directory junction without touching its target", async (agent, directory, file) => {
+    const root = await temporaryProject();
+    const outside = await temporaryProject();
+    const outsideHook = join(outside, file);
+    const outsideBytes = '{"outside":true}\n';
+    await writeFile(outsideHook, outsideBytes, "utf8");
+    await symlink(
+      outside,
+      join(root, directory),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents: [agent],
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow(/symbolic link|junction|reparse|unsafe project path/i);
+
+    await expect(readFile(outsideHook, "utf8")).resolves.toBe(outsideBytes);
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".noutify.local.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects a linked final gitignore entry without outside or partial writes", async () => {
+    const root = await temporaryProject();
+    const outside = await temporaryProject();
+    const outsideIgnore = process.platform === "win32"
+      ? join(outside, "sentinel")
+      : join(outside, "outside-ignore");
+    const outsideBytes = "outside-only\n";
+    await writeFile(outsideIgnore, outsideBytes, "utf8");
+    await symlink(
+      process.platform === "win32" ? outside : outsideIgnore,
+      join(root, ".gitignore"),
+      process.platform === "win32" ? "junction" : "file",
+    );
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents: ["codex"],
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow(/symbolic link|junction|reparse|unsafe project path/i);
+
+    await expect(readFile(outsideIgnore, "utf8")).resolves.toBe(outsideBytes);
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".noutify.local.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".codex"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("records an explicitly selected Claude integration with its public path", async () => {
@@ -815,6 +1082,39 @@ describe("Phase 0 setup lifecycle", () => {
     }));
   });
 
+  it("rejects uninstall through a native junction without touching outside bytes", async () => {
+    const root = await temporaryProject();
+    const outside = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({ projectRoot: root, agents: ["codex"], ...runtime });
+    const configPaths = [
+      join(root, "noutify.config.json"),
+      join(root, ".noutify.local.json"),
+    ];
+    const configBefore = await Promise.all(configPaths.map((path) => readFile(path)));
+    const outsideHook = join(outside, "hooks.json");
+    const outsideBytes = await readFile(join(root, ".codex", "hooks.json"));
+    await writeFile(outsideHook, outsideBytes);
+    await rm(join(root, ".codex"), { recursive: true });
+    await symlink(
+      outside,
+      join(root, ".codex"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    await expect(uninstallProject(root, runtime)).rejects.toThrow(
+      /symbolic link|junction|reparse|unsafe project path/i,
+    );
+
+    await expect(readFile(outsideHook)).resolves.toEqual(outsideBytes);
+    await expect(Promise.all(configPaths.map((path) => readFile(path)))).resolves.toEqual(
+      configBefore,
+    );
+  });
+
   it("reports changed when uninstall removes only the Noutify skill", async () => {
     const root = await temporaryProject();
     const runtime = {
@@ -849,6 +1149,40 @@ describe("Phase 0 setup lifecycle", () => {
 
     await expect(setProjectLanguage(root, "espa\u00f1ol")).resolves.toBe("es");
     expect((await readProjectConfig(root)).private.language).toBe("es");
+  });
+
+  it("rejects language and confirmation writes through a linked private config", async () => {
+    const root = await temporaryProject();
+    const outside = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({ projectRoot: root, agents: ["codex"], ...runtime });
+    const privatePath = join(root, ".noutify.local.json");
+    const outsidePrivate = join(outside, "private.json");
+    const outsideBytes = await readFile(privatePath);
+    await writeFile(outsidePrivate, outsideBytes);
+    await rm(privatePath);
+    await symlink(
+      process.platform === "win32" ? outside : outsidePrivate,
+      privatePath,
+      process.platform === "win32" ? "junction" : "file",
+    );
+
+    await expect(setProjectLanguage(root, "es")).rejects.toThrow(
+      /symbolic link|junction|reparse|unsafe project path/i,
+    );
+    await expect(confirmProject(root)).rejects.toThrow(
+      /symbolic link|junction|reparse|unsafe project path/i,
+    );
+    await expect(confirmAgent(root, "codex", runtime)).rejects.toThrow(
+      /symbolic link|junction|reparse|unsafe project path/i,
+    );
+
+    await expect(readFile(outsidePrivate)).resolves.toEqual(outsideBytes);
+    await expect(readFile(join(root, "noutify.config.json"))).resolves.toBeDefined();
+    await expect(readFile(join(root, ".codex", "hooks.json"))).resolves.toBeDefined();
   });
 
   it("restores every setup target when the final skill write fails", async () => {

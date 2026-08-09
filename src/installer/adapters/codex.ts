@@ -5,6 +5,7 @@ import {
   installCodexStopHook,
   uninstallCodexStopHook,
   type CodexHookCommand,
+  type LegacyCodexHookCommand,
 } from "../codex-hooks.js";
 import type {
   AdapterContext,
@@ -23,15 +24,63 @@ function validateRuntimePaths(runtime: RuntimePaths): void {
   }
 }
 
+function quotePortableArgument(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function quotePowerShellArgument(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 export function buildCodexStopHookCommand(
   projectRoot: string,
   runtime: RuntimePaths,
 ): CodexHookCommand {
   validateRuntimePaths(runtime);
+  const argumentsList = [
+    runtime.nodePath,
+    runtime.cliPath,
+    "hook",
+    "codex-stop",
+    "--project",
+    resolve(projectRoot),
+  ];
+  const windowsScript = `& ${argumentsList
+    .map(quotePowerShellArgument)
+    .join(" ")}; exit $LASTEXITCODE`;
+  return {
+    type: "command",
+    command: argumentsList.map(quotePortableArgument).join(" "),
+    commandWindows:
+      `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(windowsScript, "utf16le").toString("base64")}`,
+  };
+}
+
+export function buildLegacyCodexStopHookCommand(
+  projectRoot: string,
+  runtime: RuntimePaths,
+): LegacyCodexHookCommand {
+  validateRuntimePaths(runtime);
   return {
     command: runtime.nodePath,
-    args: [runtime.cliPath, "hook", "codex-stop", "--project", resolve(projectRoot)],
+    args: [
+      runtime.cliPath,
+      "hook",
+      "codex-stop",
+      "--project",
+      resolve(projectRoot),
+    ],
     timeout: 10,
+  };
+}
+
+function commands(context: AdapterContext): {
+  current: CodexHookCommand;
+  legacy: LegacyCodexHookCommand;
+} {
+  return {
+    current: buildCodexStopHookCommand(context.projectRoot, context.runtime),
+    legacy: buildLegacyCodexStopHookCommand(context.projectRoot, context.runtime),
   };
 }
 
@@ -41,22 +90,28 @@ export const codexAdapter: AgentAdapter = {
   publicPath: PUBLIC_PATH,
   ownedPaths: () => [PUBLIC_PATH],
   preflight: async (context) => {
+    const hook = commands(context);
     await countCodexStopHooks(
       context.projectRoot,
-      buildCodexStopHookCommand(context.projectRoot, context.runtime),
+      hook.current,
+      [hook.legacy],
     );
   },
-  install: async (context) =>
-    installCodexStopHook(
+  install: async (context) => {
+    const hook = commands(context);
+    return installCodexStopHook(
       context.projectRoot,
-      buildCodexStopHookCommand(context.projectRoot, context.runtime),
-    ),
+      hook.current,
+      [hook.legacy],
+    );
+  },
   inspect: async (context) => {
-    const installed =
-      (await countCodexStopHooks(
-        context.projectRoot,
-        buildCodexStopHookCommand(context.projectRoot, context.runtime),
-      )) === 1;
+    const hook = commands(context);
+    const [currentCount, ownedCount] = await Promise.all([
+      countCodexStopHooks(context.projectRoot, hook.current),
+      countCodexStopHooks(context.projectRoot, hook.current, [hook.legacy]),
+    ]);
+    const installed = currentCount === 1 && ownedCount === currentCount;
     return {
       installed,
       detail: installed
@@ -64,9 +119,12 @@ export const codexAdapter: AgentAdapter = {
         : "Codex integration is missing or modified",
     };
   },
-  uninstall: async (context) =>
-    uninstallCodexStopHook(
+  uninstall: async (context) => {
+    const hook = commands(context);
+    return uninstallCodexStopHook(
       context.projectRoot,
-      buildCodexStopHookCommand(context.projectRoot, context.runtime),
-    ),
+      hook.current,
+      [hook.legacy],
+    );
+  },
 };

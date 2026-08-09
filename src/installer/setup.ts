@@ -21,6 +21,10 @@ import {
   type NativeAgentId,
 } from "../config/integrations.js";
 import { notificationCopy } from "../core/notification-catalog.js";
+import {
+  assertSafeProjectPath,
+  assertSafeProjectPaths,
+} from "../core/project-path.js";
 import type { Notification } from "../core/types.js";
 import {
   type NtfyConfig,
@@ -125,10 +129,49 @@ export async function setupProject(
   if (selectedAgents.length === 0) {
     throw new Error("at least one agent is required");
   }
+  validateAgentSelection(selectedAgents);
+  const configPaths = [
+    join(projectRoot, ".gitignore"),
+    join(projectRoot, PUBLIC_CONFIG_FILE),
+    join(projectRoot, PRIVATE_CONFIG_FILE),
+  ];
+  await assertSafeProjectPaths(projectRoot, configPaths);
+  const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
+  const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
+  if (publicExists !== privateExists) {
+    throw new Error(
+      "Noutify configuration is incomplete; both public and private files are required",
+    );
+  }
+
+  let bundle: ReturnType<typeof createInitialConfig>;
+  let migratingV1 = false;
+  if (publicExists) {
+    const storedPublic = JSON.parse(
+      await readFile(join(projectRoot, PUBLIC_CONFIG_FILE), "utf8"),
+    ) as { version?: unknown };
+    migratingV1 = storedPublic.version === 1;
+    bundle = await readProjectConfig(projectRoot);
+  } else {
+    const initialInput: {
+      projectName: string;
+      server?: string;
+      topic?: string;
+      language?: NotificationLanguage;
+    } = {
+      projectName: input.projectName?.trim() || basename(projectRoot),
+    };
+    if (input.server !== undefined) initialInput.server = input.server;
+    if (input.topic !== undefined) initialInput.topic = input.topic;
+    if (input.language !== undefined) initialInput.language = input.language;
+    bundle = createInitialConfig(initialInput);
+  }
+
   const adapters = setupAdapters(
     selectedAgents,
     input.memoryLinks ?? [],
     dependencies,
+    publicExists ? bundle.public.integrations : [],
   ).sort((left, right) =>
     left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
   );
@@ -136,56 +179,58 @@ export async function setupProject(
     nodePath: input.nodePath,
     cliPath: input.cliPath,
   };
-  const contexts = adapters.map<{
-    adapter: AgentAdapter;
-    context: AdapterContext;
-  }>((adapter) => ({
-    adapter,
-    context: { projectRoot, runtime },
-  }));
+  const storedIntegrations = new Map(
+    (publicExists ? bundle.public.integrations : []).map((integration) => [
+      integration.agent,
+      integration,
+    ]),
+  );
+  const integrations = new Map(storedIntegrations);
+  for (const adapter of adapters) {
+    integrations.set(adapter.id, adapterIntegration(adapter));
+  }
+  const nextIntegrations = normalizeIntegrations([...integrations.values()]);
+  const contexts = adapters.map<SetupAdapterContext>((adapter) => {
+    const context = { projectRoot, runtime };
+    const stored = storedIntegrations.get(adapter.id);
+    const previous =
+      adapter.id.startsWith("generic:") &&
+      stored?.mode === "memory" &&
+      stored.path !== undefined &&
+      stored.path !== adapter.publicPath
+        ? {
+            adapter: createGenericMemoryAdapter(adapter.id, stored.path),
+            context,
+          }
+        : undefined;
+    return previous === undefined
+      ? { adapter, context }
+      : { adapter, context, previous };
+  });
+  const allAdapterContexts = contexts.flatMap((entry) =>
+    entry.previous === undefined
+      ? [{ adapter: entry.adapter, context: entry.context }]
+      : [entry.previous, { adapter: entry.adapter, context: entry.context }],
+  );
+  const ownedPaths = allAdapterContexts.flatMap(({ adapter, context }) =>
+    adapter.ownedPaths(context).map((path) => join(projectRoot, path)),
+  );
+  await assertSafeProjectPaths(projectRoot, [...configPaths, ...ownedPaths]);
   await Promise.all(
-    contexts.map(({ adapter, context }) => adapter.preflight(context)),
+    allAdapterContexts.map(({ adapter, context }) => adapter.preflight(context)),
   );
 
-  const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
-  const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
   const skillDirectory = join(projectRoot, ".claude", "skills", "noutify");
   const skillPath = join(skillDirectory, "SKILL.md");
   const skillDirectoryExisted = await exists(skillDirectory);
   const snapshotPaths = new Set([
-    join(projectRoot, ".gitignore"),
-    join(projectRoot, PUBLIC_CONFIG_FILE),
-    join(projectRoot, PRIVATE_CONFIG_FILE),
-    ...contexts.flatMap(({ adapter, context }) =>
-      adapter.ownedPaths(context).map((path) => join(projectRoot, path)),
-    ),
+    ...configPaths,
+    ...ownedPaths,
   ]);
-  const snapshots = await snapshotFiles([...snapshotPaths]);
-  let bundle: ReturnType<typeof createInitialConfig>;
+  const snapshots = await snapshotFiles(projectRoot, [...snapshotPaths]);
   try {
-    if (publicExists || privateExists) {
-      if (!publicExists || !privateExists) {
-        throw new Error(
-          "Noutify configuration is incomplete; both public and private files are required",
-        );
-      }
-      const storedPublic = JSON.parse(
-        await readFile(join(projectRoot, PUBLIC_CONFIG_FILE), "utf8"),
-      ) as { version?: unknown };
-      const migratingV1 = storedPublic.version === 1;
-      bundle = await readProjectConfig(projectRoot);
-      const integrations = new Map(
-        bundle.public.integrations.map((integration) => [
-          integration.agent,
-          integration,
-        ]),
-      );
-      for (const adapter of adapters) {
-        integrations.set(adapter.id, adapterIntegration(adapter));
-      }
-      bundle.public.integrations = normalizeIntegrations([
-        ...integrations.values(),
-      ]);
+    bundle.public.integrations = nextIntegrations;
+    if (publicExists) {
       const results = await installAdapters(contexts);
       await writeProjectConfig(projectRoot, bundle, {
         preserveValues: migratingV1,
@@ -196,22 +241,6 @@ export async function setupProject(
         server: bundle.private.server,
         integrations: results,
       };
-    } else {
-      const initialInput: {
-        projectName: string;
-        server?: string;
-        topic?: string;
-        language?: NotificationLanguage;
-      } = {
-        projectName: input.projectName?.trim() || basename(projectRoot),
-      };
-      if (input.server !== undefined) initialInput.server = input.server;
-      if (input.topic !== undefined) initialInput.topic = input.topic;
-      if (input.language !== undefined) initialInput.language = input.language;
-      bundle = createInitialConfig(initialInput);
-      bundle.public.integrations = normalizeIntegrations(
-        adapters.map(adapterIntegration),
-      );
     }
 
     const integrations = await installAdapters(contexts);
@@ -224,7 +253,7 @@ export async function setupProject(
       integrations,
     };
   } catch (error) {
-    await restoreFileSnapshots(snapshots);
+    await restoreFileSnapshots(projectRoot, snapshots);
     const skillSnapshot = snapshots.find((snapshot) => snapshot.path === skillPath);
     if (
       adapters.some((adapter) => adapter.id === "claude-code") &&
@@ -238,10 +267,13 @@ export async function setupProject(
 }
 
 async function installAdapters(
-  contexts: readonly { adapter: AgentAdapter; context: AdapterContext }[],
+  contexts: readonly SetupAdapterContext[],
 ): Promise<IntegrationSetupResult[]> {
   const results: IntegrationSetupResult[] = [];
-  for (const { adapter, context } of contexts) {
+  for (const { adapter, context, previous } of contexts) {
+    if (previous !== undefined) {
+      await previous.adapter.uninstall(previous.context);
+    }
     const mutation = await adapter.install(context);
     results.push({
       agent: adapter.id,
@@ -252,11 +284,34 @@ async function installAdapters(
   return results;
 }
 
+interface SetupAdapterContext {
+  adapter: AgentAdapter;
+  context: AdapterContext;
+  previous?: {
+    adapter: AgentAdapter;
+    context: AdapterContext;
+  };
+}
+
+function validateAgentSelection(agents: readonly AgentId[]): void {
+  if (new Set(agents).size !== agents.length) {
+    throw new Error("duplicate agent selection");
+  }
+  normalizeIntegrations(
+    agents.map((agent) => ({
+      agent,
+      mode: agent.startsWith("generic:") ? "memory" : "native",
+    })),
+  );
+}
+
 function setupAdapters(
   agents: readonly AgentId[],
   memoryLinks: readonly MemoryLink[],
   dependencies: SetupDependencies,
+  existingIntegrations: readonly IntegrationConfig[] = [],
 ): AgentAdapter[] {
+  validateAgentSelection(agents);
   const selected = new Set(agents);
   if (selected.size !== agents.length) {
     throw new Error("duplicate agent selection");
@@ -285,7 +340,11 @@ function setupAdapters(
     const override = overrides.get(agent);
     if (override !== undefined) return override;
     if (agent.startsWith("generic:")) {
-      return createGenericMemoryAdapter(agent, links.get(agent)?.relativePath);
+      const explicitPath = links.get(agent)?.relativePath;
+      const storedPath = existingIntegrations.find(
+        (integration) => integration.agent === agent,
+      )?.path;
+      return createGenericMemoryAdapter(agent, explicitPath ?? storedPath);
     }
     const adapter = nativeAdapter(agent as NativeAgentId);
     return agent === "claude-code" && dependencies.installSkill !== undefined
@@ -376,6 +435,7 @@ async function inferInstalledRuntime(
     return fallback;
   }
 
+  await assertSafeProjectPath(projectRoot, join(projectRoot, adapter.publicPath));
   const value = await readFile(join(projectRoot, adapter.publicPath), "utf8")
     .then((contents) => JSON.parse(contents) as unknown)
     .catch(() => undefined);
@@ -422,9 +482,66 @@ function collectRuntimeCandidates(
     const runtime = { nodePath: entry.command, cliPath: entry.args[0] };
     candidates.set(`${runtime.nodePath}\0${runtime.cliPath}`, runtime);
   }
+  if (entry.type === "command" && typeof entry.command === "string") {
+    const argumentsList = parsePortableCommand(entry.command);
+    if (
+      argumentsList?.length === 6 &&
+      argumentsList[0] !== undefined &&
+      isAbsolute(argumentsList[0]) &&
+      argumentsList[1] !== undefined &&
+      isAbsolute(argumentsList[1]) &&
+      argumentsList[2] === "hook" &&
+      argumentsList[3] === subcommand &&
+      argumentsList[4] === "--project" &&
+      argumentsList[5] !== undefined &&
+      resolve(argumentsList[5]) === projectRoot
+    ) {
+      const runtime = {
+        nodePath: argumentsList[0],
+        cliPath: argumentsList[1],
+      };
+      candidates.set(`${runtime.nodePath}\0${runtime.cliPath}`, runtime);
+    }
+  }
   for (const child of Object.values(entry)) {
     collectRuntimeCandidates(child, projectRoot, subcommand, candidates);
   }
+}
+
+function parsePortableCommand(value: string): string[] | undefined {
+  const words: string[] = [];
+  let current = "";
+  let quoted = false;
+  let active = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index] as string;
+    if (character === "'") {
+      quoted = !quoted;
+      active = true;
+      continue;
+    }
+    if (!quoted && character === "\\") {
+      index += 1;
+      const escaped = value[index];
+      if (escaped === undefined) return undefined;
+      current += escaped;
+      active = true;
+      continue;
+    }
+    if (!quoted && /\s/.test(character)) {
+      if (active) {
+        words.push(current);
+        current = "";
+        active = false;
+      }
+      continue;
+    }
+    current += character;
+    active = true;
+  }
+  if (quoted) return undefined;
+  if (active) words.push(current);
+  return words;
 }
 
 export async function doctorProject(
@@ -450,9 +567,10 @@ export async function doctorProject(
     });
   }
 
-  const ignoreText = await readFile(join(root, ".gitignore"), "utf8").catch(
-    () => "",
-  );
+  const ignorePath = join(root, ".gitignore");
+  const ignoreText = await assertSafeProjectPath(root, ignorePath)
+    .then(() => readFile(ignorePath, "utf8"))
+    .catch(() => "");
   const privateIgnored = ignoreText.split(/\r?\n/).includes(PRIVATE_CONFIG_FILE);
   checks.push({
     name: "private-ignore",
@@ -537,7 +655,7 @@ export async function uninstallProject(
       adapter.ownedPaths(context).map((path) => join(root, path)),
     ),
   );
-  const snapshots = await snapshotFiles([...snapshotPaths]);
+  const snapshots = await snapshotFiles(root, [...snapshotPaths]);
   let changed = false;
   try {
     for (const { adapter, context } of contexts) {
@@ -545,7 +663,7 @@ export async function uninstallProject(
       changed ||= result.changed;
     }
   } catch (error) {
-    await restoreFileSnapshots(snapshots);
+    await restoreFileSnapshots(root, snapshots);
     throw error;
   }
   return { changed, configPreserved: true };

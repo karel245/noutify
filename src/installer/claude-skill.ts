@@ -3,6 +3,8 @@ import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promi
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { assertSafeProjectPath } from "../core/project-path.js";
+
 export interface ClaudeSkillRuntime {
   nodePath: string;
   cliPath: string;
@@ -160,7 +162,11 @@ if (language !== "en" && language !== "es") {
 `;
 }
 
-async function readOwnedFile(path: string): Promise<string | null> {
+async function readOwnedFile(
+  projectRoot: string,
+  path: string,
+): Promise<string | null> {
+  await assertSafeProjectPath(projectRoot, path);
   try {
     return await readFile(path, "utf8");
   } catch (error) {
@@ -181,13 +187,23 @@ function isRecognizedSkill(
   );
 }
 
-async function writeOwnedFileAtomic(path: string, contents: string): Promise<void> {
+async function writeOwnedFileAtomic(
+  projectRoot: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  await assertSafeProjectPath(projectRoot, path);
   await mkdir(dirname(path), { recursive: true });
+  await assertSafeProjectPath(projectRoot, path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await writeFile(temporaryPath, contents, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await assertSafeProjectPath(projectRoot, path);
     await rename(temporaryPath, path);
   } finally {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await unlink(temporaryPath).catch((error: unknown) => {
       if (!isMissingFile(error)) throw error;
     });
@@ -200,8 +216,8 @@ export async function preflightClaudeSkill(
 ): Promise<void> {
   validateRuntime(runtime);
   const [skill, launcher] = await Promise.all([
-    readOwnedFile(ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
-    readOwnedFile(ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
+    readOwnedFile(projectRoot, ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
+    readOwnedFile(projectRoot, ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
   ]);
   if (skill !== null && !isRecognizedSkill(skill, projectRoot, runtime)) {
     throw new Error("Noutify Claude skill path is already occupied");
@@ -217,8 +233,8 @@ export async function hasClaudeSkill(
 ): Promise<boolean> {
   validateRuntime(runtime);
   const [skill, launcher] = await Promise.all([
-    readOwnedFile(ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
-    readOwnedFile(ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
+    readOwnedFile(projectRoot, ownedPath(projectRoot, SKILL_RELATIVE_PATH)),
+    readOwnedFile(projectRoot, ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH)),
   ]);
   return (
     skill === buildClaudeSkill(projectRoot, runtime) &&
@@ -236,17 +252,17 @@ export async function installClaudeSkill(
   const currentSkill = buildClaudeSkill(projectRoot, runtime);
   const currentLauncher = buildClaudeLauncher(runtime);
   const [skill, launcher] = await Promise.all([
-    readOwnedFile(skillFile),
-    readOwnedFile(launcherFile),
+    readOwnedFile(projectRoot, skillFile),
+    readOwnedFile(projectRoot, launcherFile),
   ]);
   if (skill === currentSkill && launcher === currentLauncher) {
     return { changed: false };
   }
   if (skill !== currentSkill) {
-    await writeOwnedFileAtomic(skillFile, currentSkill);
+    await writeOwnedFileAtomic(projectRoot, skillFile, currentSkill);
   }
   if (launcher !== currentLauncher) {
-    await writeOwnedFileAtomic(launcherFile, currentLauncher);
+    await writeOwnedFileAtomic(projectRoot, launcherFile, currentLauncher);
   }
   return { changed: true };
 }
@@ -259,15 +275,17 @@ export async function uninstallClaudeSkill(
   const skillFile = ownedPath(projectRoot, SKILL_RELATIVE_PATH);
   const launcherFile = ownedPath(projectRoot, LAUNCHER_RELATIVE_PATH);
   const [skill, launcher] = await Promise.all([
-    readOwnedFile(skillFile),
-    readOwnedFile(launcherFile),
+    readOwnedFile(projectRoot, skillFile),
+    readOwnedFile(projectRoot, launcherFile),
   ]);
   let changed = false;
   if (skill !== null && isRecognizedSkill(skill, projectRoot, runtime)) {
+    await assertSafeProjectPath(projectRoot, skillFile);
     await unlink(skillFile);
     changed = true;
   }
   if (launcher === buildClaudeLauncher(runtime)) {
+    await assertSafeProjectPath(projectRoot, launcherFile);
     await unlink(launcherFile);
     changed = true;
   }
@@ -280,7 +298,9 @@ export async function uninstallClaudeSkill(
 export async function removeEmptyClaudeSkillDirectory(
   projectRoot: string,
 ): Promise<void> {
-  await rmdir(dirname(ownedPath(projectRoot, SKILL_RELATIVE_PATH))).catch(
+  const directory = dirname(ownedPath(projectRoot, SKILL_RELATIVE_PATH));
+  await assertSafeProjectPath(projectRoot, directory);
+  await rmdir(directory).catch(
     (error: unknown) => {
       if (
         isMissingFile(error) ||

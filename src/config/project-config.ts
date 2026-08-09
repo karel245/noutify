@@ -6,7 +6,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   validateStoredLanguage,
@@ -19,6 +19,14 @@ import {
   type IntegrationConfig,
 } from "./integrations.js";
 import { generateFriendlyTopic } from "./topic.js";
+import {
+  assertSafeProjectPath,
+  assertSafeProjectPaths,
+} from "../core/project-path.js";
+import {
+  restoreFileSnapshots,
+  snapshotFiles,
+} from "../installer/file-snapshot.js";
 
 export const PUBLIC_CONFIG_FILE = "noutify.config.json";
 export const PRIVATE_CONFIG_FILE = ".noutify.local.json";
@@ -259,40 +267,37 @@ export function createInitialConfig(
   );
 }
 
-async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+async function writeTextAtomic(
+  projectRoot: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  await assertSafeProjectPath(projectRoot, path);
+  await mkdir(dirname(path), { recursive: true });
+  await assertSafeProjectPath(projectRoot, path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await writeFile(temporaryPath, contents, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await assertSafeProjectPath(projectRoot, path);
     await rename(temporaryPath, path);
   } finally {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await unlink(temporaryPath).catch(() => undefined);
   }
 }
 
-interface FileSnapshot {
-  path: string;
-  contents: string | null;
-}
-
-async function snapshotFile(path: string): Promise<FileSnapshot> {
-  try {
-    return { path, contents: await readFile(path, "utf8") };
-  } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") {
-      return { path, contents: null };
-    }
-    throw error;
-  }
-}
-
-async function restoreFile(snapshot: FileSnapshot): Promise<void> {
-  if (snapshot.contents === null) {
-    await unlink(snapshot.path).catch((error: unknown) => {
-      if (!isRecord(error) || error.code !== "ENOENT") throw error;
-    });
-    return;
-  }
-  await writeFile(snapshot.path, snapshot.contents, "utf8");
+async function writeJsonAtomic(
+  projectRoot: string,
+  path: string,
+  value: unknown,
+): Promise<void> {
+  await writeTextAtomic(
+    projectRoot,
+    path,
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
 }
 
 export async function writeProjectConfig(
@@ -309,17 +314,17 @@ export async function writeProjectConfig(
   const publicPath = join(projectRoot, PUBLIC_CONFIG_FILE);
   const privatePath = join(projectRoot, PRIVATE_CONFIG_FILE);
   const ignorePath = join(projectRoot, ".gitignore");
-  const snapshots = await Promise.all(
-    [ignorePath, publicPath, privatePath].map(snapshotFile),
-  );
+  const paths = [ignorePath, publicPath, privatePath];
+  await assertSafeProjectPaths(projectRoot, paths);
+  const snapshots = await snapshotFiles(projectRoot, paths);
 
   try {
     // Protect the private path before it can ever appear on disk.
     await ensurePrivateIgnore(projectRoot);
-    await writeJsonAtomic(publicPath, validated.public);
-    await writeJsonAtomic(privatePath, validated.private);
+    await writeJsonAtomic(projectRoot, publicPath, validated.public);
+    await writeJsonAtomic(projectRoot, privatePath, validated.private);
   } catch (error) {
-    await Promise.all(snapshots.map(restoreFile));
+    await restoreFileSnapshots(projectRoot, snapshots);
     throw error;
   }
 }
@@ -327,6 +332,10 @@ export async function writeProjectConfig(
 export async function readProjectConfig(
   projectRoot: string,
 ): Promise<ProjectConfigBundle> {
+  await assertSafeProjectPaths(projectRoot, [
+    join(projectRoot, PUBLIC_CONFIG_FILE),
+    join(projectRoot, PRIVATE_CONFIG_FILE),
+  ]);
   const [publicText, privateText] = await Promise.all([
     readFile(join(projectRoot, PUBLIC_CONFIG_FILE), "utf8"),
     readFile(join(projectRoot, PRIVATE_CONFIG_FILE), "utf8"),
@@ -336,6 +345,7 @@ export async function readProjectConfig(
 
 export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
   const ignorePath = join(projectRoot, ".gitignore");
+  await assertSafeProjectPath(projectRoot, ignorePath);
   const existing = await readFile(ignorePath, "utf8").catch(
     (error: unknown) => {
       if (
@@ -354,9 +364,9 @@ export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
   }
 
   const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-  await writeFile(
+  await writeTextAtomic(
+    projectRoot,
     ignorePath,
     `${existing}${prefix}${PRIVATE_CONFIG_FILE}\n`,
-    "utf8",
   );
 }

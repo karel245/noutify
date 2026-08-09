@@ -115,11 +115,11 @@ describe("owned Claude skill lifecycle", () => {
     const createdPath = join(root, "created.bin");
     const initial = new Uint8Array([0, 255, 10, 13, 65]);
     await writeFile(existingPath, initial);
-    const snapshots = await snapshotFiles([existingPath, createdPath]);
+    const snapshots = await snapshotFiles(root, [existingPath, createdPath]);
     await writeFile(existingPath, new Uint8Array([1, 2, 3]));
     await writeFile(createdPath, new Uint8Array([4, 5, 6]));
 
-    await restoreFileSnapshots(snapshots);
+    await restoreFileSnapshots(root, snapshots);
 
     expect(new Uint8Array(await readFile(existingPath))).toEqual(initial);
     await expect(readFile(createdPath)).rejects.toMatchObject({ code: "ENOENT" });

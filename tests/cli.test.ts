@@ -95,6 +95,32 @@ describe("runCli", () => {
     ]);
   });
 
+  it("rejects conflicting native and generic trigger modes through the CLI", async () => {
+    const root = await temporaryProject();
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--agent",
+          "codex",
+          "--agent",
+          "generic:codex",
+        ],
+        output.io,
+        { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
+      ),
+    ).toBe(1);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toEqual([
+      "multiple trigger modes for platform identity: codex",
+    ]);
+    await expect(readProjectConfig(root)).rejects.toBeDefined();
+  });
+
   it("forwards an explicit generic memory link and installs no native hooks", async () => {
     const root = await temporaryProject();
     const output = memoryIo();
