@@ -17,6 +17,7 @@ import { hasClaudeSkill } from "../../src/installer/claude-skill.js";
 import {
   buildClaudeHookCommand,
   buildLegacyClaudeHookCommand,
+  confirmAgent,
   confirmProject,
   doctorProject,
   setProjectLanguage,
@@ -24,6 +25,9 @@ import {
   testProject,
   uninstallProject,
 } from "../../src/installer/setup.js";
+import { createClaudeCodeAdapter } from "../../src/installer/adapters/claude-code.js";
+import { codexAdapter } from "../../src/installer/adapters/codex.js";
+import type { AgentAdapter } from "../../src/installer/agent-adapter.js";
 
 const temporaryRoots: string[] = [];
 
@@ -76,7 +80,7 @@ describe("Phase 0 setup lifecycle", () => {
   it("records an unlinked generic adapter as pending without inventing a path", async () => {
     const root = await temporaryProject();
 
-    await setupProject({
+    const result = await setupProject({
       projectRoot: root,
       topic: "private_topic_1234567890",
       agents: ["generic:cursor"],
@@ -86,6 +90,9 @@ describe("Phase 0 setup lifecycle", () => {
 
     expect((await readProjectConfig(root)).public.integrations).toEqual([
       { agent: "generic:cursor", mode: "memory" },
+    ]);
+    expect(result.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", status: "pending" },
     ]);
     await expect(access(join(root, "AGENTS.md"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -234,6 +241,25 @@ describe("Phase 0 setup lifecycle", () => {
     expect(codex.match(/codex-stop/g)).toHaveLength(1);
   });
 
+  it("returns deterministic per-integration status for selected adapters", async () => {
+    const root = await temporaryProject();
+    const result = await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["codex", "claude-code"],
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    });
+
+    expect(result).toMatchObject({
+      created: true,
+      integrations: [
+        { agent: "claude-code", mode: "native", status: "installed" },
+        { agent: "codex", mode: "native", status: "installed" },
+      ],
+    });
+  });
+
   it("rejects an explicitly empty agent selection before writing", async () => {
     const root = await temporaryProject();
     const ignorePath = join(root, ".gitignore");
@@ -274,6 +300,35 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("runs every selected adapter preflight before the first installation write", async () => {
+    const root = await temporaryProject();
+    const rejectingCodex: AgentAdapter = {
+      ...codexAdapter,
+      preflight: async () => {
+        throw new Error("codex collision");
+      },
+    };
+
+    await expect(
+      setupProject(
+        {
+          projectRoot: root,
+          agents: ["claude-code", "codex"],
+          nodePath: "C:/node.exe",
+          cliPath: "C:/noutify/dist/cli.js",
+        },
+        { adapters: [createClaudeCodeAdapter(), rejectingCodex] },
+      ),
+    ).rejects.toThrow("codex collision");
+
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      access(join(root, ".claude", "settings.local.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("migrates an existing v1 Claude install without changing stored values", async () => {
@@ -405,12 +460,11 @@ describe("Phase 0 setup lifecycle", () => {
       ...runtime,
     });
 
-    expect(first).toMatchObject({ created: true, hookChanged: true, topic });
+    expect(first).toMatchObject({ created: true, topic });
     expect(second).toMatchObject({
       created: false,
-      hookChanged: false,
-      topic,
     });
+    expect("topic" in second).toBe(false);
     await expect(hasClaudeStopHook(root, command)).resolves.toBe(true);
     await expect(hasClaudeSkill(root, runtime)).resolves.toBe(true);
 
@@ -442,10 +496,11 @@ describe("Phase 0 setup lifecycle", () => {
     await confirmProject(root);
     expect((await readProjectConfig(root)).private.setupCompleted).toBe(true);
 
+    await confirmAgent(root, "claude-code");
+
     const diagnosis = await doctorProject(root, runtime);
     expect(diagnosis.ok).toBe(true);
-    expect(diagnosis.checks).toHaveLength(5);
-    expect(diagnosis.checks.every((check) => check.ok)).toBe(true);
+    expect(diagnosis.checks.every((check) => check.status !== "fail")).toBe(true);
     expect(JSON.stringify(diagnosis)).not.toContain(topic);
 
     const uninstall = await uninstallProject(root, runtime);
@@ -498,8 +553,8 @@ describe("Phase 0 setup lifecycle", () => {
 
     expect(result.ok).toBe(false);
     expect(
-      result.checks.find((check) => check.name === "claude-stop-hook"),
-    ).toMatchObject({ ok: false, message: "expected one Noutify Stop hook; found 2" });
+      result.checks.find((check) => check.name === "claude-code-integration"),
+    ).toMatchObject({ status: "fail" });
   });
 
   it("fails doctor when only the legacy shell-form hook remains", async () => {
@@ -533,11 +588,8 @@ describe("Phase 0 setup lifecycle", () => {
 
     expect(result.ok).toBe(false);
     expect(
-      result.checks.find((check) => check.name === "claude-stop-hook"),
-    ).toMatchObject({
-      ok: false,
-      message: "expected one current Noutify Stop hook; found 1 legacy",
-    });
+      result.checks.find((check) => check.name === "claude-code-integration"),
+    ).toMatchObject({ status: "fail" });
   });
 
   it("fails doctor when the Noutify skill is modified", async () => {
@@ -562,8 +614,169 @@ describe("Phase 0 setup lifecycle", () => {
 
     expect(result.ok).toBe(false);
     expect(
-      result.checks.find((check) => check.name === "claude-skill"),
-    ).toMatchObject({ ok: false });
+      result.checks.find((check) => check.name === "claude-code-integration"),
+    ).toMatchObject({ status: "fail" });
+  });
+
+  it("tracks automatic receipt confirmation independently for each selected agent", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      agents: ["codex", "claude-code"],
+      ...runtime,
+    });
+    await confirmProject(root);
+    await confirmAgent(root, "codex");
+
+    const result = await doctorProject(root, runtime);
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      name: "codex-automatic-receipt",
+      status: "pass",
+    }));
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      name: "claude-code-automatic-receipt",
+      status: "warn",
+    }));
+  });
+
+  it("rejects confirmation for an unselected agent without changing private config bytes", async () => {
+    const root = await temporaryProject();
+    await setupProject({
+      projectRoot: root,
+      agents: ["codex"],
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    });
+    const privatePath = join(root, ".noutify.local.json");
+    const before = await readFile(privatePath);
+
+    await expect(confirmAgent(root, "claude-code")).rejects.toThrow(
+      "agent integration is not selected: claude-code",
+    );
+
+    await expect(readFile(privatePath)).resolves.toEqual(before);
+  });
+
+  it("keeps a deselected installed adapter and its configuration unchanged", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({
+      projectRoot: root,
+      agents: ["claude-code", "codex"],
+      ...runtime,
+    });
+    const codexPath = join(root, ".codex", "hooks.json");
+    const before = await readFile(codexPath);
+
+    await setupProject({
+      projectRoot: root,
+      agents: ["claude-code"],
+      ...runtime,
+    });
+
+    await expect(readFile(codexPath)).resolves.toEqual(before);
+    expect((await readProjectConfig(root)).public.integrations).toContainEqual({
+      agent: "codex",
+      mode: "native",
+      path: ".codex/hooks.json",
+    });
+  });
+
+  it("restores the whole setup transaction when the second sorted adapter fails", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await setupProject({ projectRoot: root, agents: ["claude-code"], ...runtime });
+    const paths = [
+      join(root, ".gitignore"),
+      join(root, "noutify.config.json"),
+      join(root, ".noutify.local.json"),
+      join(root, ".claude", "settings.local.json"),
+      join(root, ".claude", "settings.local.json.noutify-backup"),
+      join(root, ".claude", "skills", "noutify", "SKILL.md"),
+      join(root, ".claude", "skills", "noutify", "launcher.mjs"),
+      join(root, ".codex", "hooks.json"),
+    ];
+    const before = await Promise.all(paths.map((path) => readFile(path).catch(() => null)));
+    const failingCodex: AgentAdapter = {
+      ...codexAdapter,
+      install: async (context) => {
+        await codexAdapter.install(context);
+        throw new Error("second adapter failed");
+      },
+    };
+
+    await expect(
+      setupProject(
+        { projectRoot: root, agents: ["codex", "claude-code"], ...runtime },
+        { adapters: [createClaudeCodeAdapter(), failingCodex] },
+      ),
+    ).rejects.toThrow("second adapter failed");
+
+    const after = await Promise.all(paths.map((path) => readFile(path).catch(() => null)));
+    expect(after).toEqual(before);
+  });
+
+  it("uninstalls every configured exact-owned integration and preserves config", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const memoryPath = join(root, "AGENTS.md");
+    await writeFile(memoryPath, "# Existing instructions\n", "utf8");
+    await setupProject({
+      projectRoot: root,
+      agents: ["claude-code", "codex", "generic:cursor"],
+      memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
+      ...runtime,
+    });
+    const publicPath = join(root, "noutify.config.json");
+    const privatePath = join(root, ".noutify.local.json");
+    const configBefore = await Promise.all([
+      readFile(publicPath),
+      readFile(privatePath),
+    ]);
+
+    await expect(uninstallProject(root, runtime)).resolves.toEqual({
+      changed: true,
+      configPreserved: true,
+    });
+
+    await expect(Promise.all([
+      readFile(publicPath),
+      readFile(privatePath),
+    ])).resolves.toEqual(configBefore);
+    await expect(readFile(memoryPath, "utf8")).resolves.toBe("# Existing instructions\n");
+    await expect(hasClaudeSkill(root, runtime)).resolves.toBe(false);
+    await expect(
+      readFile(join(root, ".codex", "hooks.json"), "utf8"),
+    ).resolves.not.toContain("codex-stop");
+    const diagnosis = await doctorProject(root, runtime);
+    expect(diagnosis.ok).toBe(false);
+    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
+      name: "claude-code-integration",
+      status: "fail",
+    }));
+    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
+      name: "codex-integration",
+      status: "fail",
+    }));
+    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
+      name: "generic:cursor-integration",
+      status: "fail",
+    }));
   });
 
   it("reports changed when uninstall removes only the Noutify skill", async () => {

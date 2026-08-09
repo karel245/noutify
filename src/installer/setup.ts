@@ -5,7 +5,6 @@ import {
   PRIVATE_CONFIG_FILE,
   PUBLIC_CONFIG_FILE,
   createInitialConfig,
-  ensurePrivateIgnore,
   readProjectConfig,
   writeProjectConfig,
 } from "../config/project-config.js";
@@ -15,6 +14,7 @@ import {
 } from "../config/language.js";
 import {
   normalizeIntegrations,
+  parseAgentId,
   type AgentId,
   type IntegrationConfig,
   type NativeAgentId,
@@ -27,15 +27,8 @@ import {
   sendNtfy,
 } from "../providers/ntfy.js";
 import {
-  type ClaudeHookCommand,
-  countClaudeStopHooks,
-  uninstallClaudeStopHook,
-} from "./claude-settings.js";
-import {
-  hasClaudeSkill,
   installClaudeSkill,
   removeEmptyClaudeSkillDirectory,
-  uninstallClaudeSkill,
 } from "./claude-skill.js";
 import {
   nativeAdapter,
@@ -71,17 +64,30 @@ export interface SetupProjectInput extends RuntimePaths {
   language?: NotificationLanguage;
 }
 
-export interface SetupProjectResult {
-  created: boolean;
-  hookChanged: boolean;
-  topic: string;
-  language: NotificationLanguage;
-  server: string;
-  hookCommand: ClaudeHookCommand;
+export interface IntegrationSetupResult {
+  agent: AgentId;
+  mode: IntegrationConfig["mode"];
+  status: "installed" | "pending";
 }
+
+export type SetupProjectResult =
+  | {
+      created: true;
+      topic: string;
+      language: NotificationLanguage;
+      server: string;
+      integrations: IntegrationSetupResult[];
+    }
+  | {
+      created: false;
+      language: NotificationLanguage;
+      server: string;
+      integrations: IntegrationSetupResult[];
+    };
 
 export interface SetupDependencies {
   installSkill?: typeof installClaudeSkill;
+  adapters?: readonly AgentAdapter[];
 }
 
 export type NotificationSender = (
@@ -90,13 +96,8 @@ export type NotificationSender = (
 ) => Promise<SendResult>;
 
 export interface DoctorCheck {
-  name:
-    | "configuration"
-    | "private-ignore"
-    | "claude-stop-hook"
-    | "claude-skill"
-    | "confirmed";
-  ok: boolean;
+  name: string;
+  status: "pass" | "warn" | "fail";
   message: string;
 }
 
@@ -127,6 +128,8 @@ export async function setupProject(
     selectedAgents,
     input.memoryLinks ?? [],
     dependencies,
+  ).sort((left, right) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
   );
   const runtime: RuntimePaths = {
     nodePath: input.nodePath,
@@ -143,17 +146,6 @@ export async function setupProject(
     contexts.map(({ adapter, context }) => adapter.preflight(context)),
   );
 
-  const hookCommand = buildClaudeHookCommand(projectRoot, runtime);
-  const legacyHookCommand = buildLegacyClaudeHookCommand(projectRoot, runtime);
-  let hookChanged = false;
-  if (adapters.some((adapter) => adapter.id === "claude-code")) {
-    const [currentHookCount, ownedHookCount] = await Promise.all([
-      countClaudeStopHooks(projectRoot, hookCommand),
-      countClaudeStopHooks(projectRoot, hookCommand, [legacyHookCommand]),
-    ]);
-    hookChanged = currentHookCount !== 1 || ownedHookCount !== currentHookCount;
-  }
-
   const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
   const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
   const skillDirectory = join(projectRoot, ".claude", "skills", "noutify");
@@ -168,8 +160,7 @@ export async function setupProject(
     ),
   ]);
   const snapshots = await snapshotFiles([...snapshotPaths]);
-  let created = false;
-  let bundle;
+  let bundle: ReturnType<typeof createInitialConfig>;
   try {
     if (publicExists || privateExists) {
       if (!publicExists || !privateExists) {
@@ -182,7 +173,6 @@ export async function setupProject(
       ) as { version?: unknown };
       const migratingV1 = storedPublic.version === 1;
       bundle = await readProjectConfig(projectRoot);
-      await ensurePrivateIgnore(projectRoot);
       const integrations = new Map(
         bundle.public.integrations.map((integration) => [
           integration.agent,
@@ -195,9 +185,16 @@ export async function setupProject(
       bundle.public.integrations = normalizeIntegrations([
         ...integrations.values(),
       ]);
+      const results = await installAdapters(contexts);
       await writeProjectConfig(projectRoot, bundle, {
         preserveValues: migratingV1,
       });
+      return {
+        created: false,
+        language: bundle.private.language,
+        server: bundle.private.server,
+        integrations: results,
+      };
     } else {
       const initialInput: {
         projectName: string;
@@ -214,20 +211,16 @@ export async function setupProject(
       bundle.public.integrations = normalizeIntegrations(
         adapters.map(adapterIntegration),
       );
-      await writeProjectConfig(projectRoot, bundle);
-      created = true;
     }
 
-    for (const { adapter, context } of contexts) {
-      await adapter.install(context);
-    }
+    const integrations = await installAdapters(contexts);
+    await writeProjectConfig(projectRoot, bundle);
     return {
-      created,
-      hookChanged,
+      created: true,
       topic: bundle.private.topic,
       language: bundle.private.language,
       server: bundle.private.server,
-      hookCommand,
+      integrations,
     };
   } catch (error) {
     await restoreFileSnapshots(snapshots);
@@ -243,12 +236,30 @@ export async function setupProject(
   }
 }
 
+async function installAdapters(
+  contexts: readonly { adapter: AgentAdapter; context: AdapterContext }[],
+): Promise<IntegrationSetupResult[]> {
+  const results: IntegrationSetupResult[] = [];
+  for (const { adapter, context } of contexts) {
+    const mutation = await adapter.install(context);
+    results.push({
+      agent: adapter.id,
+      mode: adapter.mode,
+      status: mutation.pending === true ? "pending" : "installed",
+    });
+  }
+  return results;
+}
+
 function setupAdapters(
   agents: readonly AgentId[],
   memoryLinks: readonly MemoryLink[],
   dependencies: SetupDependencies,
 ): AgentAdapter[] {
   const selected = new Set(agents);
+  if (selected.size !== agents.length) {
+    throw new Error("duplicate agent selection");
+  }
   const links = new Map<AgentId, MemoryLink>();
   for (const link of memoryLinks) {
     if (!selected.has(link.agent)) {
@@ -262,7 +273,16 @@ function setupAdapters(
     }
     links.set(link.agent, link);
   }
+  const overrides = new Map<AgentId, AgentAdapter>();
+  for (const adapter of dependencies.adapters ?? []) {
+    if (overrides.has(adapter.id)) {
+      throw new Error(`duplicate adapter override: ${adapter.id}`);
+    }
+    overrides.set(adapter.id, adapter);
+  }
   return agents.map((agent) => {
+    const override = overrides.get(agent);
+    if (override !== undefined) return override;
     if (agent.startsWith("generic:")) {
       return createGenericMemoryAdapter(agent, links.get(agent)?.relativePath);
     }
@@ -313,27 +333,39 @@ export async function confirmProject(projectRoot: string): Promise<void> {
   await writeProjectConfig(root, bundle);
 }
 
+export async function confirmAgent(
+  projectRoot: string,
+  agentValue: string,
+): Promise<void> {
+  const root = resolve(projectRoot);
+  const agent = parseAgentId(agentValue);
+  const bundle = await readProjectConfig(root);
+  if (!bundle.public.integrations.some((entry) => entry.agent === agent)) {
+    throw new Error(`agent integration is not selected: ${agent}`);
+  }
+  bundle.private.automaticReceipts[agent] = true;
+  await writeProjectConfig(root, bundle);
+}
+
 export async function doctorProject(
   projectRoot: string,
   runtime: RuntimePaths,
 ): Promise<DoctorResult> {
   const root = resolve(projectRoot);
-  const hookCommand = buildClaudeHookCommand(root, runtime);
-  const legacyHookCommand = buildLegacyClaudeHookCommand(root, runtime);
   const checks: DoctorCheck[] = [];
-  let bundle;
+  let bundle: Awaited<ReturnType<typeof readProjectConfig>> | undefined;
 
   try {
     bundle = await readProjectConfig(root);
     checks.push({
       name: "configuration",
-      ok: true,
+      status: "pass",
       message: "public and private configuration are valid",
     });
   } catch {
     checks.push({
       name: "configuration",
-      ok: false,
+      status: "fail",
       message: "configuration is missing or invalid",
     });
   }
@@ -341,49 +373,62 @@ export async function doctorProject(
   const ignoreText = await readFile(join(root, ".gitignore"), "utf8").catch(
     () => "",
   );
+  const privateIgnored = ignoreText.split(/\r?\n/).includes(PRIVATE_CONFIG_FILE);
   checks.push({
     name: "private-ignore",
-    ok: ignoreText.split(/\r?\n/).includes(PRIVATE_CONFIG_FILE),
-    message: ignoreText.split(/\r?\n/).includes(PRIVATE_CONFIG_FILE)
+    status: privateIgnored ? "pass" : "fail",
+    message: privateIgnored
       ? "private configuration is ignored by Git"
       : "private configuration is not ignored by Git",
   });
 
-  const [currentHookCount, ownedHookCount] = await Promise.all([
-    countClaudeStopHooks(root, hookCommand),
-    countClaudeStopHooks(root, hookCommand, [legacyHookCommand]),
-  ]).catch(() => [0, 0]);
-  const legacyHookCount = ownedHookCount - currentHookCount;
-  const hookInstalled = currentHookCount === 1 && legacyHookCount === 0;
-  checks.push({
-    name: "claude-stop-hook",
-    ok: hookInstalled,
-    message: hookInstalled
-      ? "Claude Code Stop hook is installed"
-      : currentHookCount === 0 && legacyHookCount > 0
-        ? `expected one current Noutify Stop hook; found ${legacyHookCount} legacy`
-        : `expected one Noutify Stop hook; found ${ownedHookCount}`,
-  });
+  if (bundle !== undefined) {
+    const confirmed = bundle.private.setupCompleted;
+    checks.push({
+      name: "phone-receipt",
+      status: confirmed ? "pass" : "warn",
+      message: confirmed
+        ? "phone receipt was confirmed"
+        : "phone receipt has not been confirmed",
+    });
 
-  const skillInstalled = await hasClaudeSkill(root, runtime).catch(() => false);
-  checks.push({
-    name: "claude-skill",
-    ok: skillInstalled,
-    message: skillInstalled
-      ? "Claude Code Noutify skill is installed"
-      : "Claude Code Noutify skill is missing or modified",
-  });
+    for (const integration of bundle.public.integrations) {
+      try {
+        const adapter = adapterFromIntegration(integration);
+        const inspection = await adapter.inspect({ projectRoot: root, runtime });
+        const pending =
+          integration.mode === "memory" &&
+          integration.path === undefined &&
+          inspection.detail.includes("pending");
+        checks.push({
+          name: `${integration.agent}-integration`,
+          status: inspection.installed ? "pass" : pending ? "warn" : "fail",
+          message: inspection.detail,
+        });
+      } catch {
+        checks.push({
+          name: `${integration.agent}-integration`,
+          status: "fail",
+          message: `${integration.agent} integration is unavailable or invalid`,
+        });
+      }
 
-  const confirmed = bundle?.private.setupCompleted === true;
-  checks.push({
-    name: "confirmed",
-    ok: confirmed,
-    message: confirmed
-      ? "phone receipt was confirmed"
-      : "phone receipt has not been confirmed",
-  });
+      const receiptConfirmed =
+        bundle.private.automaticReceipts[integration.agent] === true;
+      checks.push({
+        name: `${integration.agent}-automatic-receipt`,
+        status: receiptConfirmed ? "pass" : "warn",
+        message: receiptConfirmed
+          ? "automatic delivery receipt is confirmed"
+          : "automatic delivery receipt has not been confirmed",
+      });
+    }
+  }
 
-  return { ok: checks.every((check) => check.ok), checks };
+  return {
+    ok: checks.every((check) => check.status !== "fail"),
+    checks,
+  };
 }
 
 export async function uninstallProject(
@@ -391,11 +436,43 @@ export async function uninstallProject(
   runtime: RuntimePaths,
 ): Promise<{ changed: boolean; configPreserved: true }> {
   const root = resolve(projectRoot);
-  const command = buildClaudeHookCommand(root, runtime);
-  const legacyCommand = buildLegacyClaudeHookCommand(root, runtime);
-  const [hook, skill] = await Promise.all([
-    uninstallClaudeStopHook(root, command, [legacyCommand]),
-    uninstallClaudeSkill(root, runtime),
-  ]);
-  return { changed: hook.changed || skill.changed, configPreserved: true };
+  const bundle = await readProjectConfig(root);
+  const contexts = bundle.public.integrations
+    .map((integration) => ({
+      adapter: adapterFromIntegration(integration),
+      context: { projectRoot: root, runtime },
+    }))
+    .sort((left, right) =>
+      left.adapter.id < right.adapter.id
+        ? -1
+        : left.adapter.id > right.adapter.id
+          ? 1
+          : 0,
+    );
+  await Promise.all(
+    contexts.map(({ adapter, context }) => adapter.preflight(context)),
+  );
+  const snapshotPaths = new Set(
+    contexts.flatMap(({ adapter, context }) =>
+      adapter.ownedPaths(context).map((path) => join(root, path)),
+    ),
+  );
+  const snapshots = await snapshotFiles([...snapshotPaths]);
+  let changed = false;
+  try {
+    for (const { adapter, context } of contexts) {
+      const result = await adapter.uninstall(context);
+      changed ||= result.changed;
+    }
+  } catch (error) {
+    await restoreFileSnapshots(snapshots);
+    throw error;
+  }
+  return { changed, configPreserved: true };
+}
+
+function adapterFromIntegration(integration: IntegrationConfig): AgentAdapter {
+  return integration.agent.startsWith("generic:")
+    ? createGenericMemoryAdapter(integration.agent, integration.path)
+    : nativeAdapter(integration.agent as NativeAgentId);
 }

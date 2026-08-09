@@ -305,6 +305,78 @@ describe("runCli", () => {
     ).toBe(0);
   });
 
+  it("confirms one selected agent and renders warnings without failing doctor", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--agent",
+        "claude-code",
+        "--agent",
+        "codex",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const confirmOutput = memoryIo();
+    const doctorOutput = memoryIo();
+
+    expect(
+      await runCli(
+        ["confirm-agent", "codex", "--project", root],
+        confirmOutput.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(confirmOutput.stdout).toEqual([
+      "Automatic receipt confirmed for codex.",
+    ]);
+    expect(
+      await runCli(["doctor", "--project", root], doctorOutput.io, dependencies),
+    ).toBe(0);
+    expect(doctorOutput.stdout).toContain(
+      "PASS codex-automatic-receipt: automatic delivery receipt is confirmed",
+    );
+    expect(doctorOutput.stdout).toContain(
+      "WARN claude-code-automatic-receipt: automatic delivery receipt has not been confirmed",
+    );
+  });
+
+  it("rejects confirm-agent for an unselected integration without changing config", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    await runCli(
+      ["setup", "--project", root, "--agent", "codex"],
+      memoryIo().io,
+      dependencies,
+    );
+    const before = await readProjectConfig(root);
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        ["confirm-agent", "claude-code", "--project", root],
+        output.io,
+        dependencies,
+      ),
+    ).toBe(1);
+    expect(await readProjectConfig(root)).toEqual(before);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toEqual([
+      "agent integration is not selected: claude-code",
+    ]);
+  });
+
   it("reports an integration removal when uninstall removes only the skill", async () => {
     const root = await temporaryProject();
     const dependencies = {
@@ -527,7 +599,7 @@ describe("runCli", () => {
     expect(await runCli(["--help"], output.io)).toBe(0);
 
     expect(output.stdout.join("\n")).toContain(
-      "setup | test | confirm | doctor | uninstall",
+      "setup | test | confirm | confirm-agent | doctor | uninstall",
     );
   });
 
@@ -699,6 +771,9 @@ describe("runCli", () => {
         language: "es",
         server: "https://ntfy.sh",
         topic: "Noutify-54h7ja8k9p2m",
+        integrations: [
+          { agent: "claude-code", mode: "native", status: "installed" },
+        ],
       }),
     ]);
   });
@@ -733,6 +808,9 @@ describe("runCli", () => {
         status: "existing",
         language: "es",
         server: "https://ntfy.sh",
+        integrations: [
+          { agent: "claude-code", mode: "native", status: "installed" },
+        ],
       }),
     ]);
     expect((await readProjectConfig(root)).private.language).toBe("es");

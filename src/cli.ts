@@ -11,6 +11,7 @@ import { parseCodexStopPayload } from "./agents/codex/stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
 import type { Notification } from "./core/types.js";
 import {
+  confirmAgent,
   confirmProject,
   doctorProject,
   setProjectLanguage,
@@ -36,12 +37,13 @@ export interface CliDependencies {
 
 const HELP = `Noutify Phase 0
 
-Commands: setup | test | confirm | doctor | uninstall | language
+Commands: setup | test | confirm | confirm-agent | doctor | uninstall | language
 
   noutify setup [--project PATH] [--server URL] [--topic TOPIC] [--language LANGUAGE] [--format json]
   noutify language <language> [--project PATH]
   noutify test [--project PATH]
   noutify confirm [--project PATH]
+  noutify confirm-agent <agent> [--project PATH]
   noutify doctor [--project PATH]
   noutify uninstall [--project PATH]
 `;
@@ -119,6 +121,7 @@ function validateOptions(parsed: ParsedArguments): void {
     language: ["project"],
     test: ["project"],
     confirm: ["project"],
+    "confirm-agent": ["project"],
     doctor: ["project"],
     uninstall: ["project"],
     hook: ["project"],
@@ -146,9 +149,13 @@ function validateOptions(parsed: ParsedArguments): void {
   if (parsed.command === "setup" && optionValues(parsed, "format")[0] !== undefined && optionValues(parsed, "format")[0] !== "json") {
     throw new Error("setup format must be json");
   }
-  if (parsed.command === "language") {
+  if (parsed.command === "language" || parsed.command === "confirm-agent") {
     if (parsed.operands.length !== 1) {
-      throw new Error("language requires exactly one language");
+      throw new Error(
+        parsed.command === "language"
+          ? "language requires exactly one language"
+          : "confirm-agent requires exactly one agent",
+      );
     }
   } else if (parsed.operands.length > 0) {
     throw new Error(`unexpected operand ${parsed.operands[0]} for ${parsed.command}`);
@@ -295,18 +302,20 @@ export async function runCli(
                   language: result.language,
                   server: result.server,
                   topic: result.topic,
+                  integrations: result.integrations,
                 }
               : {
                   status: "existing",
                   language: result.language,
                   server: result.server,
+                  integrations: result.integrations,
                 },
           ));
         } else {
           io.writeStdout(
             result.created
               ? `Noutify installed. Subscribe your phone to topic: ${result.topic}`
-              : "Noutify is already configured; the Stop hook is ready.",
+              : "Noutify is already configured; selected agent integrations are ready.",
           );
           io.writeStdout("Run `noutify test` after subscribing your phone.");
         }
@@ -342,10 +351,19 @@ export async function runCli(
         await confirmProject(projectRoot);
         io.writeStdout("Phone receipt confirmed. Noutify setup is active.");
         return 0;
+      case "confirm-agent": {
+        const agent = parsed.operands[0];
+        if (agent === undefined) {
+          throw new Error("confirm-agent requires exactly one agent");
+        }
+        await confirmAgent(projectRoot, agent);
+        io.writeStdout(`Automatic receipt confirmed for ${parseAgentId(agent)}.`);
+        return 0;
+      }
       case "doctor": {
         const result = await doctorProject(projectRoot, runtime);
         for (const check of result.checks) {
-          io.writeStdout(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.message}`);
+          io.writeStdout(`${check.status.toUpperCase()} ${check.name}: ${check.message}`);
         }
         return result.ok ? 0 : 1;
       }
