@@ -60,15 +60,25 @@ export function parseArguments(argv) {
   const parsed = {};
   for (let index = 0; index < argv.length; index += 1) {
     const option = argv[index];
-    if (option !== "--language" && option !== "--project") {
+    if (
+      option !== "--language" &&
+      option !== "--project" &&
+      option !== "--agent" &&
+      option !== "--memory-link"
+    ) {
       throw new Error(`unknown argument: ${option}`);
     }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) {
       throw new Error(`missing value for ${option}`);
     }
-    if (option === "--language") parsed.language = value;
-    if (option === "--project") parsed.project = value;
+    if (option === "--language" || option === "--project") {
+      const key = option.slice(2);
+      if (parsed[key] !== undefined) throw new Error(`duplicate argument: ${option}`);
+      parsed[key] = value;
+    }
+    if (option === "--agent") (parsed.agents ??= []).push(value);
+    if (option === "--memory-link") (parsed.memoryLinks ??= []).push(value);
     index += 1;
   }
   return parsed;
@@ -94,16 +104,41 @@ function isSetupRecord(value, requestedLanguage) {
   if (!isHttpServer(value.server)) return false;
   if (value.status === "existing") {
     return (
-      hasExactKeys(value, ["status", "language", "server"]) &&
+      hasSetupKeys(value, ["status", "language", "server"]) &&
+      hasValidIntegrations(value) &&
       supportedLanguages.has(value.language)
     );
   }
   return (
     value.status === "created" &&
-    hasExactKeys(value, ["status", "language", "server", "topic"]) &&
+    hasSetupKeys(value, ["status", "language", "server", "topic"]) &&
+    hasValidIntegrations(value) &&
     value.language === requestedLanguage &&
     typeof value.topic === "string" &&
     /^Noutify-[23456789abcdefghjkmnpqrstuvwxyz]{12}$/.test(value.topic)
+  );
+}
+
+function hasSetupKeys(value, baseKeys) {
+  const keys = Object.hasOwn(value, "integrations")
+    ? [...baseKeys, "integrations"]
+    : baseKeys;
+  return hasExactKeys(value, keys);
+}
+
+function hasValidIntegrations(value) {
+  if (!Object.hasOwn(value, "integrations")) return true;
+  return (
+    Array.isArray(value.integrations) &&
+    value.integrations.every((integration) =>
+      integration !== null &&
+      typeof integration === "object" &&
+      !Array.isArray(integration) &&
+      hasExactKeys(integration, ["agent", "mode", "status"]) &&
+      typeof integration.agent === "string" &&
+      (integration.mode === "native" || integration.mode === "memory") &&
+      (integration.status === "installed" || integration.status === "pending")
+    )
   );
 }
 
@@ -217,7 +252,18 @@ export async function runInstall(argv, suppliedDependencies = {}) {
     [
       "setup",
       dependencies.nodePath,
-      [cliPath, "setup", "--project", target, "--language", parsed.language, "--format", "json"],
+      [
+        cliPath,
+        "setup",
+        "--project",
+        target,
+        "--language",
+        parsed.language,
+        ...(parsed.agents ?? []).flatMap((agent) => ["--agent", agent]),
+        ...(parsed.memoryLinks ?? []).flatMap((link) => ["--memory-link", link]),
+        "--format",
+        "json",
+      ],
     ],
   ];
 

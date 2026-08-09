@@ -443,10 +443,89 @@ describe("compact installer", () => {
     expect(fixture.commands.slice(0, 4).every(({ options }) => options.cwd === noutifyRoot)).toBe(true);
   });
 
+  it("forwards repeated explicit agents and memory links only to setup", async () => {
+    const fixture = createDependencies();
+
+    const exitCode = await runInstall(
+      [
+        "--language",
+        "en",
+        "--agent",
+        "codex",
+        "--agent",
+        "generic:cursor",
+        "--memory-link",
+        "generic:cursor=AGENTS.md",
+      ],
+      fixture.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(fixture.commands.slice(0, 4).every(({ argumentsList }) =>
+      !argumentsList.includes("--agent") && !argumentsList.includes("--memory-link")
+    )).toBe(true);
+    expect(fixture.commands.at(-1).argumentsList).toEqual([
+      cliPath,
+      "setup",
+      "--project",
+      targetRoot,
+      "--language",
+      "en",
+      "--agent",
+      "codex",
+      "--agent",
+      "generic:cursor",
+      "--memory-link",
+      "generic:cursor=AGENTS.md",
+      "--format",
+      "json",
+    ]);
+  });
+
+  it("accepts the integration report emitted by the current setup CLI", async () => {
+    const fixture = createDependencies({
+      run: (command, argumentsList, options) => {
+        fixture.commands.push({ command, argumentsList, options });
+        return {
+          status: 0,
+          stdout: command === nodePath
+            ? `${JSON.stringify({
+                status: "created",
+                language: "en",
+                server: "https://ntfy.sh",
+                topic: friendlyTopic,
+                integrations: [{ agent: "codex", mode: "native", status: "installed" }],
+              })}\n`
+            : "",
+          stderr: "",
+        };
+      },
+    });
+
+    const exitCode = await runInstall(
+      ["--language", "en", "--agent", "codex"],
+      fixture.dependencies,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(fixture.output.stderr).toEqual([]);
+  });
+
   it("parses only supported installer arguments", () => {
     expect(parseArguments(["--language", "es", "--project", overrideRoot])).toEqual({
       language: "es",
       project: overrideRoot,
+    });
+    expect(parseArguments([
+      "--agent",
+      "codex",
+      "--agent",
+      "generic:cursor",
+      "--memory-link",
+      "generic:cursor=AGENTS.md",
+    ])).toEqual({
+      agents: ["codex", "generic:cursor"],
+      memoryLinks: ["generic:cursor=AGENTS.md"],
     });
     expect(() => parseArguments(["--language"])).toThrow("missing value for --language");
   });

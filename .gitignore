@@ -1,6 +1,7 @@
 node_modules/
 dist/
 work/
+/release/
 .worktrees/
 .noutify.local.json
 *.noutify-backup
