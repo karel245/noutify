@@ -71,7 +71,7 @@ location after setup. Do not read, print, request, or copy
 | --- | --- | --- | --- |
 | `claude-code` | `.claude/settings.local.json` plus the Noutify project skill | `Stop` | Reload Claude Code so it reads the project hook and skill. |
 | `codex` | `.codex/hooks.json` | `Stop` | Open `/hooks`, review the project-local Noutify command hook, and trust it. Do not bypass trust. |
-| `gemini-cli` | `.gemini/settings.json` | `AfterAgent` | Review the new project-hook security warning and its source in the `/hooks` panel, inspect and approve it, then start or restart Gemini CLI. |
+| `gemini-cli` | `.gemini/settings.json` | `AfterAgent` | Review the project hook source, acknowledge the security warning when the hook executes, use the `/hooks` panel to verify it is present, enabled, and reporting status, then start or restart Gemini CLI. |
 | `copilot-cli` | `.github/copilot/settings.local.json` | `agentStop` | Start or restart GitHub Copilot CLI; hook configuration is loaded at startup. Copilot cloud is unsupported and untested. |
 | `windsurf` | `.windsurf/hooks.json` | `post_cascade_response` | Reload Windsurf Cascade after it reads the project hook. |
 

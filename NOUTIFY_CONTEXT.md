@@ -54,7 +54,7 @@ This confirms the phone channel, not automatic delivery. Each native adapter
 needs its own later real-turn receipt and `confirm-agent <id>`; `doctor` never
 infers receipt from installed files or delivery success. Codex additionally
 requires the owner to review and trust the project-local hook through `/hooks`.
-Gemini CLI requires the owner to review the new project-hook security warning and its source in the `/hooks` panel, inspect and approve it, then start or restart Gemini CLI. Start or restart GitHub Copilot CLI; hook configuration is loaded at startup.
+Gemini CLI requires the owner to review the project hook source, acknowledge the security warning when the hook executes, use the `/hooks` panel to verify it is present, enabled, and reporting status, then start or restart Gemini CLI. Start or restart GitHub Copilot CLI; hook configuration is loaded at startup.
 The `Noutify/` folder must stay in its installed position until explicit
 uninstall.
 

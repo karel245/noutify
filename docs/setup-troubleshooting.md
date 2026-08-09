@@ -59,7 +59,7 @@ node Noutify/dist/cli.js doctor
 ```
 
 Codex requires reviewing and trusting the project hook through `/hooks`. Claude
-Code uses `Stop`. For Gemini CLI `AfterAgent`, review the new project-hook security warning and its source in the `/hooks` panel, inspect and approve it, then start or restart Gemini CLI. For local Copilot CLI `agentStop`: Start or restart GitHub Copilot CLI; hook configuration is loaded at startup. Windsurf uses
+Code uses `Stop`. For Gemini CLI `AfterAgent`, review the project hook source, acknowledge the security warning when the hook executes, use the `/hooks` panel to verify it is present, enabled, and reporting status, then start or restart Gemini CLI. For local Copilot CLI `agentStop`: Start or restart GitHub Copilot CLI; hook configuration is loaded at startup. Windsurf uses
 `post_cascade_response`. Each one remains native unverified until this
 receipt is recorded. A generic memory integration remains best effort even
 after a memory link is present.
