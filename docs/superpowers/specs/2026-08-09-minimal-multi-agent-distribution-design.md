@@ -8,9 +8,10 @@ Git history, development dependencies, or implementation plans.
 
 The installation remains agent-guided. The agent asks which coding platforms
 will use the project, then installs one integration per selected platform.
-Claude Code and Codex receive deterministic native `Stop` hooks. Other agents
-receive an explicitly experimental memory-based integration when they can read
-project instructions and execute Node.js.
+Claude Code, Codex, Gemini CLI, local GitHub Copilot CLI, and Windsurf receive
+deterministic native lifecycle hooks. Other agents receive an explicitly
+experimental memory-based integration when they can read project instructions
+and execute Node.js.
 
 This design separates three claims:
 
@@ -26,6 +27,8 @@ This design separates three claims:
 - Let one project select one or several coding agents during setup.
 - Add a project-local Codex `Stop` adapter without changing user-global Codex
   configuration.
+- Add project-local native adapters for Gemini CLI `AfterAgent`, local GitHub
+  Copilot CLI `agentStop`, and Windsurf `post_cascade_response`.
 - Keep the existing Claude Code adapter independent and reversible.
 - Provide a generic memory fallback for agents without supported lifecycle
   events.
@@ -43,6 +46,8 @@ This design separates three claims:
 - Publishing an npm package, marketplace plugin, or signed installer in this
   iteration.
 - Supporting operating systems other than the validated Windows path.
+- Claiming native support for Cursor, OpenCode, Cline, or cloud-hosted Copilot
+  execution in this iteration.
 
 ## 1. Source Tree and Distribution Artifact
 
@@ -117,9 +122,9 @@ repeatable options:
 node Noutify/install.mjs --language es --agent codex --agent claude-code
 ```
 
-Supported canonical identifiers are `codex`, `claude-code`, and
-`generic:<agent-slug>`, where the slug uses lowercase ASCII letters, digits,
-and hyphens. Unsupported or malformed values stop before target
+Supported canonical identifiers are `codex`, `claude-code`, `gemini-cli`,
+`copilot-cli`, `windsurf`, and `generic:<agent-slug>`, where the slug uses
+lowercase ASCII letters, digits, and hyphens. Unsupported or malformed values stop before target
 mutation. Selected agents are stored in public configuration; no topic or other
 secret is stored with them.
 
@@ -157,7 +162,49 @@ backup, skill, and launcher. Selecting Codex alone does not create `.claude/`.
 Migration recognizes only byte-exact historical Noutify-owned Claude files.
 Unrelated or modified Claude settings and skills remain untouched.
 
-## 6. Generic Memory Integration
+## 6. Additional Native Adapters
+
+### Gemini CLI
+
+Gemini CLI owns one exact `AfterAgent` command hook merged into the project
+`.gemini/settings.json`. `AfterAgent` fires once after the final response for a
+turn. The adapter validates `hook_event_name`, checks `stop_hook_active`, ignores
+`prompt`, `prompt_response`, and `transcript_path`, emits one empty JSON object
+on stdout, and treats delivery failure as non-fatal.
+
+### GitHub Copilot CLI
+
+Local GitHub Copilot CLI owns one exact `agentStop` command hook in
+`.github/copilot/settings.local.json`, which is kept local and ignored by Git.
+This location prevents the first release from installing the hook into Copilot
+cloud-agent jobs, whose ephemeral sandbox has restricted outbound networking.
+The adapter accepts the documented camelCase and VS Code-compatible stop input,
+checks `stop_hook_active`, ignores the transcript path, emits one empty JSON
+object, and never requests continuation.
+
+### Windsurf Cascade
+
+Windsurf owns one exact `post_cascade_response` hook merged into
+`.windsurf/hooks.json` with `show_output: false`. The event is asynchronous after
+Cascade finishes a response. The adapter validates `agent_action_name`, ignores
+the complete response in `tool_info`, uses the workspace root only for safe
+project resolution, writes no output, and never blocks Cascade.
+
+All three integrations follow the same snapshot, collision, idempotency,
+per-adapter acceptance, doctor, and exact-owned uninstall rules as Codex and
+Claude Code.
+
+### Deferred native candidates
+
+- Cursor remains on the generic memory path until its local, CLI, and cloud hook
+  surfaces pass separate compatibility tests against the current official hook
+  contract.
+- OpenCode remains on the generic memory path while its in-process plugin API is
+  beta and would add a different runtime-loading model to the minimal package.
+- Cline remains on the generic memory path because `TaskComplete` represents
+  successful task completion rather than the universal `WAITING` state.
+
+## 7. Generic Memory Integration
 
 `generic:<agent-slug>` is a best-effort fallback, not a native hook. The
 installer creates one compact, non-secret instruction file owned by Noutify.
@@ -197,7 +244,7 @@ Only one trigger mode is active for a given agent identity. A platform with a
 native adapter does not also receive the memory-trigger instruction, preventing
 duplicate notifications.
 
-## 7. Configuration and Status
+## 8. Configuration and Status
 
 Public configuration gains a versioned list of integrations. Each entry records:
 
@@ -225,7 +272,7 @@ the agent runs `confirm-agent <canonical-agent-id>`. `doctor` reports full
 adapter acceptance only from that explicit per-agent confirmation. It must not
 infer receipt from hook files, process exit status, or provider response alone.
 
-## 8. Setup and Acceptance Flow
+## 9. Setup and Acceptance Flow
 
 The compact agent flow is:
 
@@ -253,7 +300,7 @@ The final report distinguishes:
 
 No earlier stage is presented as proof of a later stage.
 
-## 9. Transactionality and Uninstall
+## 10. Transactionality and Uninstall
 
 Setup snapshots every target file it may mutate before the first write. A
 failure restores byte content and absence state for:
@@ -262,13 +309,16 @@ failure restores byte content and absence state for:
 - ignore rules;
 - Claude settings, backup, skill, and launcher when selected;
 - Codex hooks when selected;
+- Gemini settings when selected;
+- local Copilot settings and ignore rules when selected;
+- Windsurf hooks when selected;
 - generic instruction and memory-link files when selected.
 
 Uninstall removes only exact Noutify-owned entries and files for the selected
 integrations. It preserves unrelated Claude hooks, Codex hooks, agent memory,
 and Noutify configuration unless a future explicit purge command is designed.
 
-## 10. Security and Privacy
+## 11. Security and Privacy
 
 - Topics retain the approved cryptographically random friendly format.
 - Topics appear once only for a newly created installation.
@@ -281,7 +331,7 @@ and Noutify configuration unless a future explicit purge command is designed.
   configuration.
 - Generic memory support is always labeled experimental and best effort.
 
-## 11. Testing and Acceptance
+## 12. Testing and Acceptance
 
 Automated coverage must include:
 
@@ -292,6 +342,8 @@ Automated coverage must include:
 - multiple-agent selection and deterministic public configuration;
 - Codex hook merge, collision, rollback, idempotency, payload handling, silence,
   bounded delivery, and exact-owned uninstall;
+- equivalent lifecycle, merge, collision, rollback, silence, and uninstall
+  coverage for Gemini CLI, local Copilot CLI, and Windsurf;
 - Claude-only, Codex-only, combined, and generic-memory paths;
 - generic memory collision and pending-link behavior;
 - topic-free outputs and artifacts;
@@ -309,16 +361,32 @@ Real acceptance for the first release requires:
 8. repeat the native automatic check with Claude Code when both integrations are
    selected.
 
-## 12. Public Compatibility Language
+Gemini CLI, local Copilot CLI, and Windsurf move from `native unverified` to
+`native verified` only after the same real-turn and explicit phone-receipt gate
+is completed on their actual supported surface.
+
+## 13. Public Compatibility Language
 
 Documentation may say:
 
 > Noutify uses an agent-neutral installation protocol. Reliable automatic
-> notifications require a tested native adapter; Claude Code and Codex are the
-> first supported adapters. Other agents can use an experimental memory-based
-> integration when they support durable project instructions and local Node.js
-> commands.
+> notifications require a tested native adapter. Claude Code, Codex, Gemini CLI,
+> local GitHub Copilot CLI, and Windsurf have project-local adapters; the
+> compatibility table shows which have passed real-device acceptance. Other
+> agents can use an experimental memory-based integration when they support
+> durable project instructions and local Node.js commands.
 
 Documentation must not say that automatic notifications work with every agent.
-The compatibility table distinguishes `native verified`, `memory best effort`,
-and `unsupported or untested`.
+The compatibility table distinguishes `native verified`, `native unverified`,
+`memory best effort`, and `unsupported or untested`.
+
+## 14. Official Adapter References
+
+- Codex lifecycle hooks: <https://developers.openai.com/codex/hooks>
+- Claude Code hooks: <https://code.claude.com/docs/en/hooks>
+- Gemini CLI hooks: <https://geminicli.com/docs/hooks/reference/>
+- GitHub Copilot hooks: <https://docs.github.com/en/copilot/reference/hooks-reference>
+- Windsurf Cascade hooks: <https://docs.windsurf.com/es/windsurf/cascade/hooks>
+- Cursor hook rollout: <https://cursor.com/changelog>
+- OpenCode plugin events: <https://opencode.ai/v2/docs/build/plugins>
+- Cline hooks: <https://docs.cline.bot/customization/hooks>
