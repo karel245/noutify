@@ -11,6 +11,7 @@ import {
 } from "../src/config/project-config.js";
 import { uninstallClaudeStopHook } from "../src/installer/claude-settings.js";
 import { buildClaudeHookCommand } from "../src/installer/setup.js";
+import { sendNtfy } from "../src/providers/ntfy.js";
 import { optionValues, parseArguments, runCli } from "../src/cli.js";
 
 const temporaryRoots: string[] = [];
@@ -739,6 +740,55 @@ describe("runCli", () => {
       expect(output.stderr).toEqual([]);
     }
   });
+
+  it.each([
+    ["Gemini", "gemini-cli", "gemini-after-agent", '{"hook_event_name":"AfterAgent"}'],
+    ["Copilot", "copilot-cli", "copilot-agent-stop", '{"stopReason":"end_turn"}'],
+  ] as const)(
+    "writes %s's mandatory empty object after two notification timeouts",
+    async (_label, agent, subcommand, input) => {
+      const root = await temporaryProject();
+      let attempts = 0;
+      const retryDelays: number[] = [];
+      const dependencies = {
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+        send: (notification: Notification, config: { server: string; topic: string }) =>
+          sendNtfy(notification, config, {
+            fetch: async () => {
+              attempts += 1;
+              throw new DOMException("attempt timed out", "TimeoutError");
+            },
+            sleep: async (milliseconds: number) => {
+              retryDelays.push(milliseconds);
+            },
+          }),
+      };
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "private_topic_1234567890",
+          "--agent",
+          agent,
+        ],
+        memoryIo().io,
+        dependencies,
+      );
+      await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+      const hookIo = memoryIo(input);
+
+      await expect(
+        runCli(["hook", subcommand, "--project", root], hookIo.io, dependencies),
+      ).resolves.toBe(0);
+      expect(attempts).toBe(2);
+      expect(retryDelays).toEqual([500]);
+      expect(hookIo.stdout).toEqual(["{}"]);
+      expect(hookIo.stderr).toEqual([]);
+    },
+  );
 
   it.each([
     [

@@ -347,30 +347,42 @@ export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
   await ensureIgnoreRules(projectRoot, [PRIVATE_CONFIG_FILE]);
 }
 
+function validateIgnoreRule(rule: string): void {
+  if (!rule || /[\r\n]/.test(rule)) {
+    throw new Error("gitignore rule must be one non-empty line");
+  }
+}
+
+async function readIgnoreText(projectRoot: string): Promise<string> {
+  const ignorePath = join(projectRoot, ".gitignore");
+  await assertSafeProjectPath(projectRoot, ignorePath);
+  return readFile(ignorePath, "utf8").catch((error: unknown) => {
+    if (isRecord(error) && "code" in error && error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+}
+
+export async function hasIgnoreRule(
+  projectRoot: string,
+  rule: string,
+): Promise<boolean> {
+  validateIgnoreRule(rule);
+  const existing = await readIgnoreText(projectRoot);
+  return existing.split(/\r?\n/).includes(rule);
+}
+
 export async function ensureIgnoreRules(
   projectRoot: string,
   rules: readonly string[],
 ): Promise<void> {
   const ignorePath = join(projectRoot, ".gitignore");
-  await assertSafeProjectPath(projectRoot, ignorePath);
-  const existing = await readFile(ignorePath, "utf8").catch(
-    (error: unknown) => {
-      if (
-        isRecord(error) &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
-        return "";
-      }
-      throw error;
-    },
-  );
+  const existing = await readIgnoreText(projectRoot);
   const lines = new Set(existing.split(/\r?\n/));
   const missing: string[] = [];
   for (const rule of rules) {
-    if (!rule || /[\r\n]/.test(rule)) {
-      throw new Error("gitignore rule must be one non-empty line");
-    }
+    validateIgnoreRule(rule);
     if (!lines.has(rule)) {
       lines.add(rule);
       missing.push(rule);

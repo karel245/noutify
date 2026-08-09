@@ -1,14 +1,17 @@
 import { isAbsolute, resolve } from "node:path";
 
 import { assertSafeProjectPath } from "../../core/project-path.js";
-import { ensureIgnoreRules } from "../../config/project-config.js";
 import {
-  inspectJsonHook,
-  installJsonHook,
-  preflightJsonHook,
-  uninstallJsonHook,
-  type JsonHookFileSpec,
-} from "../json-hook-file.js";
+  ensureIgnoreRules,
+  hasIgnoreRule,
+} from "../../config/project-config.js";
+import {
+  inspectJsoncHook,
+  installJsoncHook,
+  preflightJsoncHook,
+  uninstallJsoncHook,
+} from "../jsonc-hook-file.js";
+import type { JsonHookFileSpec } from "../json-hook-file.js";
 import type {
   AdapterContext,
   AgentAdapter,
@@ -94,28 +97,31 @@ export const copilotCliAdapter: AgentAdapter = {
       context.projectRoot,
       resolve(context.projectRoot, ".gitignore"),
     );
-    await preflightJsonHook(context.projectRoot, hookSpec(context));
+    await preflightJsoncHook(context.projectRoot, hookSpec(context));
   },
   install: async (context) => {
     await ensureIgnoreRules(context.projectRoot, [COPILOT_LOCAL_SETTINGS]);
-    const mutation = await installJsonHook(
+    const mutation = await installJsoncHook(
       context.projectRoot,
       hookSpec(context),
     );
     return mutation;
   },
   inspect: async (context) => {
-    const inspection = await inspectJsonHook(
-      context.projectRoot,
-      hookSpec(context),
-    );
+    const [inspection, ignored] = await Promise.all([
+      inspectJsoncHook(context.projectRoot, hookSpec(context)),
+      hasIgnoreRule(context.projectRoot, COPILOT_LOCAL_SETTINGS),
+    ]);
+    const installed = inspection.installed && ignored;
     return {
-      installed: inspection.installed,
-      detail: inspection.installed
+      installed,
+      detail: installed
         ? "GitHub Copilot CLI integration is installed"
-        : "GitHub Copilot CLI integration is missing or modified",
+        : !ignored
+          ? "GitHub Copilot CLI local settings are not ignored by Git"
+          : "GitHub Copilot CLI integration is missing or modified",
     };
   },
   uninstall: async (context) =>
-    uninstallJsonHook(context.projectRoot, hookSpec(context)),
+    uninstallJsoncHook(context.projectRoot, hookSpec(context)),
 };
