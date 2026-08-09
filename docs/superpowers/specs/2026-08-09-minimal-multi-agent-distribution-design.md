@@ -170,7 +170,9 @@ Gemini CLI owns one exact `AfterAgent` command hook merged into the project
 `.gemini/settings.json`. `AfterAgent` fires once after the final response for a
 turn. The adapter validates `hook_event_name`, checks `stop_hook_active`, ignores
 `prompt`, `prompt_response`, and `transcript_path`, emits one empty JSON object
-on stdout, and treats delivery failure as non-fatal.
+on stdout, and treats delivery failure as non-fatal. The owned hook follows the
+current nested Gemini schema: `type: "command"`, one fixed encoded `command`
+string, and a `10000` millisecond timeout.
 
 ### GitHub Copilot CLI
 
@@ -178,17 +180,23 @@ Local GitHub Copilot CLI owns one exact `agentStop` command hook in
 `.github/copilot/settings.local.json`, which is kept local and ignored by Git.
 This location prevents the first release from installing the hook into Copilot
 cloud-agent jobs, whose ephemeral sandbox has restricted outbound networking.
-The adapter accepts the documented camelCase and VS Code-compatible stop input,
-checks `stop_hook_active`, ignores the transcript path, emits one empty JSON
-object, and never requests continuation.
+The adapter accepts the documented native camelCase stop payload identified by
+`stopReason: "end_turn"` and the VS Code-compatible payload identified by
+`hook_event_name: "Stop"` and `stop_reason: "end_turn"`; conflicting mixed
+forms are rejected. It checks `stop_hook_active`, ignores transcript fields,
+emits one empty JSON object, and never requests continuation. The local handler
+uses the official command schema with an encoded `powershell` command and
+`timeoutSec: 10`.
 
 ### Windsurf Cascade
 
 Windsurf owns one exact `post_cascade_response` hook merged into
 `.windsurf/hooks.json` with `show_output: false`. The event is asynchronous after
 Cascade finishes a response. The adapter validates `agent_action_name`, ignores
-the complete response in `tool_info`, uses the workspace root only for safe
-project resolution, writes no output, and never blocks Cascade.
+the complete response in `tool_info`, uses only the fixed installed `--project`
+argument for project resolution, writes no output, and never blocks Cascade.
+The handler uses Windsurf's documented single `command` string; Noutify keeps
+delivery bounded internally because Windsurf documents no timeout field.
 
 All three integrations follow the same snapshot, collision, idempotency,
 per-adapter acceptance, doctor, and exact-owned uninstall rules as Codex and

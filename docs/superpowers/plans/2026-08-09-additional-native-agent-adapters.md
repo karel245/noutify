@@ -15,7 +15,8 @@
 - Gemini CLI owns `.gemini/settings.json` `AfterAgent`; local Copilot CLI owns `.github/copilot/settings.local.json` `agentStop`; Windsurf owns `.windsurf/hooks.json` `post_cascade_response`.
 - Copilot support is local-only; never install a project hook into cloud-agent execution or a committed shared Copilot settings path.
 - Hooks ignore prompts, transcripts, response bodies, `tool_info`, and all other conversational content.
-- Gemini and Copilot emit exactly one empty JSON object plus a newline on stdout; Windsurf and all failure paths are silent.
+- Gemini and Copilot emit exactly one empty JSON object plus a newline on stdout; Windsurf and all notification-failure paths are silent.
+- Platform-owned handlers match the current official schemas: Gemini uses a nested `type: "command"` handler with a single command string and millisecond timeout; local Copilot uses an inline `agentStop` command handler with `powershell` and `timeoutSec`; Windsurf uses `command` plus `show_output: false`. Because the supported target is Windows-only, Noutify encodes fixed PowerShell invocations instead of interpolating paths into shell text.
 - Every hook is exact-owned, idempotent, merge-safe, bounded, non-blocking, and removed only by exact structural comparison.
 - Setup snapshots all selected adapter files and ignore rules before the first write and restores prior bytes/absence on any failure.
 - Automatic acceptance is stored only after explicit real-phone receipt through `confirm-agent <id>`.
@@ -58,8 +59,10 @@
 const spec = {
   relativePath: ".agent/settings.json",
   arrayPath: ["hooks", "Stop"],
-  owned: { command: "node", args: ["noutify"] },
-  isOwned: (value: unknown) => deepEqual(value, { command: "node", args: ["noutify"] }),
+  owned: { type: "command", command: "node noutify", timeout: 10 },
+  isOwned: (value: unknown) => deepEqual(value, {
+    type: "command", command: "node noutify", timeout: 10,
+  }),
 };
 await installJsonHook(projectRoot, spec);
 expect(await inspectJsonHook(projectRoot, spec)).toEqual({ installed: true, count: 1 });
@@ -120,7 +123,7 @@ git commit -m "refactor: share exact-owned JSON hook merge"
 **Interfaces:**
 - Consumes: `runWaitingHook`, `AgentAdapter`, and `json-hook-file`.
 - Produces: `parseGeminiAfterAgentPayload(input: string): WaitingHookPayload` requiring `hook_event_name === "AfterAgent"` and treating `stop_hook_active === true` as recursive.
-- Owns one `.gemini/settings.json` entry under `hooks.AfterAgent` with command, fixed args, and 10-second timeout.
+- Owns one `.gemini/settings.json` hook-definition entry under `hooks.AfterAgent`; its nested handler is `{ type: "command", command: <encoded fixed Windows invocation>, timeout: 10000 }`, because Gemini measures timeout in milliseconds.
 - Produces CLI route `hook gemini-after-agent`; after processing any syntactically valid Gemini hook event it writes exactly `{}\n`, including notification delivery failure, while malformed/wrong-event input remains safe and writes `{}\n` so Gemini receives a valid hook response.
 
 - [ ] **Step 1: Write failing Gemini parser, merge, and output-contract tests**
@@ -162,7 +165,7 @@ export function parseGeminiAfterAgentPayload(input: string): WaitingHookPayload 
 }
 ```
 
-Register `gemini-cli`, build fixed shell-free args `[cliPath, "hook", "gemini-after-agent", "--project", root]`, use `.gemini/settings.json` as the public integration path, and ensure CLI output contains only the empty object expected by Gemini.
+Register `gemini-cli`, build a fixed PowerShell-encoded command that invokes `[cliPath, "hook", "gemini-after-agent", "--project", root]` without interpolating paths or payload data into shell syntax, use `.gemini/settings.json` as the public integration path, and ensure CLI output contains only the empty object expected by Gemini.
 
 - [ ] **Step 4: Run Gemini, setup, type, and full tests**
 
@@ -194,19 +197,23 @@ git commit -m "feat: add Gemini CLI notifications"
 
 **Interfaces:**
 - Consumes: shared dispatcher, adapter registry, JSON hook helper, and ignore merge.
-- Produces: `parseCopilotAgentStopPayload(input: string): WaitingHookPayload` accepting documented `hookEventName: "agentStop"` and VS Code-compatible `hook_event_name: "agentStop"`, but rejecting conflicting names.
+- Produces: `parseCopilotAgentStopPayload(input: string): WaitingHookPayload` accepting documented native camelCase payloads identified by `stopReason: "end_turn"` and VS Code-compatible payloads identified by `hook_event_name: "Stop"` plus `stop_reason: "end_turn"`; conflicting mixed forms are rejected.
 - Owns `.github/copilot/settings.local.json` and ensures that exact path is ignored by Git once.
 - Produces CLI route `hook copilot-agent-stop`, writing exactly `{}\n` and no stderr for every invocation.
 
 - [ ] **Step 1: Write failing payload, local-path, ignore, and output tests**
 
 ```ts
-expect(parseCopilotAgentStopPayload('{"hookEventName":"agentStop"}'))
-  .toEqual({ valid: true, recursive: false });
-expect(parseCopilotAgentStopPayload('{"hook_event_name":"agentStop"}'))
+expect(parseCopilotAgentStopPayload(
+  '{"stopReason":"end_turn","stop_hook_active":false}',
+))
   .toEqual({ valid: true, recursive: false });
 expect(parseCopilotAgentStopPayload(
-  '{"hookEventName":"agentStop","hook_event_name":"beforeTool"}',
+  '{"hook_event_name":"Stop","stop_reason":"end_turn","stop_hook_active":false}',
+))
+  .toEqual({ valid: true, recursive: false });
+expect(parseCopilotAgentStopPayload(
+  '{"stopReason":"end_turn","hook_event_name":"BeforeTool"}',
 ).valid).toBe(false);
 ```
 
@@ -228,7 +235,7 @@ export async function ensureIgnoreRules(projectRoot: string, rules: readonly str
 }
 ```
 
-Use the documented `agentStop` hook array in the local settings file, fixed shell-free command/args, and a 10-second timeout. Snapshot `.gitignore` and settings before preflight/install; never advertise or configure Copilot cloud support.
+Use the documented inline `hooks.agentStop` array in the local settings file. Own an exact `{ type: "command", powershell: <encoded fixed Windows invocation>, timeoutSec: 10 }` handler; never interpolate payload or path data into shell syntax. Snapshot `.gitignore` and settings before preflight/install; never advertise or configure Copilot cloud support.
 
 - [ ] **Step 4: Run Copilot, transaction, type, and full tests**
 
@@ -259,7 +266,7 @@ git commit -m "feat: add local Copilot CLI notifications"
 **Interfaces:**
 - Consumes: shared dispatcher, adapter registry, and JSON hook helper.
 - Produces: `parseWindsurfPostResponsePayload(input: string): WaitingHookPayload` requiring `agent_action_name === "post_cascade_response"`.
-- Owns one `.windsurf/hooks.json` `post_cascade_response` entry with `show_output: false` and fixed shell-free command/args.
+- Owns one `.windsurf/hooks.json` `post_cascade_response` entry with one fixed PowerShell-encoded `command` string and `show_output: false`; Windsurf documents no hook timeout field, so bounded delivery remains enforced inside Noutify.
 - Produces CLI route `hook windsurf-post-response`, always silent and exit 0.
 
 - [ ] **Step 1: Write failing Windsurf parser, merge, and silence tests**
@@ -300,7 +307,7 @@ export function parseWindsurfPostResponsePayload(input: string): WaitingHookPayl
 }
 ```
 
-Build the exact owned entry with `show_output: false`, fixed executable/args, and the shared timeout. Resolve the configured project from the fixed `--project` argument, never from untrusted `workspace_root` payload data.
+Build the exact owned entry with `show_output: false` and a fixed PowerShell-encoded command that invokes Noutify with the configured `--project` argument. Never derive the project or command from hook payload fields; the documented `post_cascade_response` payload contains the full response under `tool_info`, which must be ignored.
 
 - [ ] **Step 4: Run Windsurf, setup, type, and full tests**
 
