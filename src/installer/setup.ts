@@ -16,6 +16,7 @@ import {
 import {
   normalizeIntegrations,
   type AgentId,
+  type IntegrationConfig,
   type NativeAgentId,
 } from "../config/integrations.js";
 import { notificationCopy } from "../core/notification-catalog.js";
@@ -42,11 +43,13 @@ import {
   type AgentAdapter,
   type RuntimePaths,
 } from "./agent-adapter.js";
+import type { MemoryLink } from "./agent-memory.js";
 import {
   buildClaudeHookCommand,
   buildLegacyClaudeHookCommand,
   createClaudeCodeAdapter,
 } from "./adapters/claude-code.js";
+import { createGenericMemoryAdapter } from "./adapters/generic-memory.js";
 import {
   restoreFileSnapshots,
   snapshotFiles,
@@ -61,6 +64,7 @@ export {
 export interface SetupProjectInput extends RuntimePaths {
   projectRoot: string;
   agents?: readonly AgentId[];
+  memoryLinks?: readonly MemoryLink[];
   projectName?: string;
   server?: string;
   topic?: string;
@@ -119,7 +123,11 @@ export async function setupProject(
   if (selectedAgents.length === 0) {
     throw new Error("at least one agent is required");
   }
-  const adapters = setupAdapters(selectedAgents, dependencies);
+  const adapters = setupAdapters(
+    selectedAgents,
+    input.memoryLinks ?? [],
+    dependencies,
+  );
   const runtime: RuntimePaths = {
     nodePath: input.nodePath,
     cliPath: input.cliPath,
@@ -182,11 +190,7 @@ export async function setupProject(
         ]),
       );
       for (const adapter of adapters) {
-        integrations.set(adapter.id, {
-          agent: adapter.id,
-          mode: adapter.mode,
-          path: adapter.publicPath,
-        });
+        integrations.set(adapter.id, adapterIntegration(adapter));
       }
       bundle.public.integrations = normalizeIntegrations([
         ...integrations.values(),
@@ -208,11 +212,7 @@ export async function setupProject(
       if (input.language !== undefined) initialInput.language = input.language;
       bundle = createInitialConfig(initialInput);
       bundle.public.integrations = normalizeIntegrations(
-        adapters.map((adapter) => ({
-          agent: adapter.id,
-          mode: adapter.mode,
-          path: adapter.publicPath,
-        })),
+        adapters.map(adapterIntegration),
       );
       await writeProjectConfig(projectRoot, bundle);
       created = true;
@@ -245,17 +245,38 @@ export async function setupProject(
 
 function setupAdapters(
   agents: readonly AgentId[],
+  memoryLinks: readonly MemoryLink[],
   dependencies: SetupDependencies,
 ): AgentAdapter[] {
+  const selected = new Set(agents);
+  const links = new Map<AgentId, MemoryLink>();
+  for (const link of memoryLinks) {
+    if (!selected.has(link.agent)) {
+      throw new Error(`memory link agent is not selected: ${link.agent}`);
+    }
+    if (!link.agent.startsWith("generic:")) {
+      throw new Error(`memory link requires a generic agent: ${link.agent}`);
+    }
+    if (links.has(link.agent)) {
+      throw new Error(`duplicate memory link for ${link.agent}`);
+    }
+    links.set(link.agent, link);
+  }
   return agents.map((agent) => {
     if (agent.startsWith("generic:")) {
-      throw new Error(`agent adapter is not available: ${agent}`);
+      return createGenericMemoryAdapter(agent, links.get(agent)?.relativePath);
     }
     const adapter = nativeAdapter(agent as NativeAgentId);
     return agent === "claude-code" && dependencies.installSkill !== undefined
       ? createClaudeCodeAdapter({ installSkill: dependencies.installSkill })
       : adapter;
   });
+}
+
+function adapterIntegration(adapter: AgentAdapter): IntegrationConfig {
+  return adapter.publicPath === undefined
+    ? { agent: adapter.id, mode: adapter.mode }
+    : { agent: adapter.id, mode: adapter.mode, path: adapter.publicPath };
 }
 
 export async function setProjectLanguage(

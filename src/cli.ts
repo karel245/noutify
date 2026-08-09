@@ -19,6 +19,7 @@ import {
   uninstallProject,
   type NotificationSender,
 } from "./installer/setup.js";
+import { parseMemoryLink } from "./installer/agent-memory.js";
 import { sendNtfy, type SendResult } from "./providers/ntfy.js";
 
 export interface CliIo {
@@ -71,7 +72,11 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let subcommand: string | undefined;
   let argumentTokens = tokens;
 
-  if (command === "hook" && tokens[0] && !tokens[0].startsWith("--")) {
+  if (
+    (command === "hook" || command === "notify") &&
+    tokens[0] &&
+    !tokens[0].startsWith("--")
+  ) {
     subcommand = tokens[0];
     argumentTokens = tokens.slice(1);
   }
@@ -117,6 +122,7 @@ function validateOptions(parsed: ParsedArguments): void {
     doctor: ["project"],
     uninstall: ["project"],
     hook: ["project"],
+    notify: ["agent", "project"],
     help: [],
     "--help": [],
     "-h": [],
@@ -128,7 +134,9 @@ function validateOptions(parsed: ParsedArguments): void {
   if (unexpected !== undefined) {
     throw new Error(`unknown option --${unexpected} for ${parsed.command}`);
   }
-  const repeatableOptions = new Set(["agent", "memory-link"]);
+  const repeatableOptions = new Set(
+    parsed.command === "setup" ? ["agent", "memory-link"] : [],
+  );
   const duplicate = [...parsed.options.entries()].find(
     ([option, values]) => !repeatableOptions.has(option) && values.length > 1,
   );
@@ -205,6 +213,36 @@ async function runCodexStopHook(
   return 0;
 }
 
+async function runGenericWaitingNotification(
+  projectRoot: string,
+  agentValue: string | undefined,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    if (agentValue === undefined) return 0;
+    const agent = parseAgentId(agentValue);
+    if (!agent.startsWith("generic:")) return 0;
+    const bundle = await readProjectConfig(projectRoot);
+    const selected = bundle.public.integrations.some(
+      (integration) =>
+        integration.agent === agent && integration.mode === "memory",
+    );
+    if (!selected) return 0;
+    await runWaitingHook("", {
+      agent,
+      projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: () => ({ valid: true, recursive: false }),
+      send: (notification) => sender(notification, bundle.private),
+    });
+  } catch {
+    // Internal notifications must be silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
 export async function runCli(
   argv: string[],
   io: CliIo = defaultIo,
@@ -215,7 +253,7 @@ export async function runCli(
     parsed = parseArguments(argv);
     validateOptions(parsed);
   } catch (error) {
-    if (argv[0] === "hook") {
+    if (argv[0] === "hook" || argv[0] === "notify") {
       return 0;
     }
     io.writeStderr(error instanceof Error ? error.message : "invalid arguments");
@@ -242,10 +280,12 @@ export async function runCli(
         const topic = optionValues(parsed, "topic")[0];
         const language = optionValues(parsed, "language")[0];
         const agents = optionValues(parsed, "agent");
+        const memoryLinks = optionValues(parsed, "memory-link");
         if (server !== undefined) input.server = server;
         if (topic !== undefined) input.topic = topic;
         if (language !== undefined) input.language = normalizeNotificationLanguage(language);
         if (agents.length > 0) input.agents = agents.map(parseAgentId);
+        if (memoryLinks.length > 0) input.memoryLinks = memoryLinks.map(parseMemoryLink);
         const result = await setupProject(input);
         if (optionValues(parsed, "format")[0] === "json") {
           io.writeStdout(JSON.stringify(
@@ -326,15 +366,24 @@ export async function runCli(
           return runCodexStopHook(projectRoot, io, runtime.send);
         }
         return 0;
+      case "notify":
+        if (parsed.subcommand === "waiting") {
+          return runGenericWaitingNotification(
+            projectRoot,
+            optionValues(parsed, "agent")[0],
+            runtime.send,
+          );
+        }
+        return 0;
       default:
         io.writeStderr(`Unknown command: ${parsed.command}`);
         return 1;
     }
   } catch (error) {
-    if (parsed.command !== "hook") {
+    if (parsed.command !== "hook" && parsed.command !== "notify") {
       io.writeStderr(error instanceof Error ? error.message : "Noutify command failed");
     }
-    return parsed.command === "hook" ? 0 : 1;
+    return parsed.command === "hook" || parsed.command === "notify" ? 0 : 1;
   }
 }
 

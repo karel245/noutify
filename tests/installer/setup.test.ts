@@ -42,6 +42,105 @@ afterEach(async () => {
 });
 
 describe("Phase 0 setup lifecycle", () => {
+  it("installs a linked generic memory adapter without native hook directories", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["generic:cursor"],
+      memoryLinks: [
+        { agent: "generic:cursor", relativePath: "AGENTS.md" },
+      ],
+      ...runtime,
+    });
+
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", path: "AGENTS.md" },
+    ]);
+    await expect(readFile(join(root, "AGENTS.md"), "utf8")).resolves.toContain(
+      "<!-- noutify:generic:cursor:start -->",
+    );
+    await expect(access(join(root, ".claude"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".codex"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("records an unlinked generic adapter as pending without inventing a path", async () => {
+    const root = await temporaryProject();
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["generic:cursor"],
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    });
+
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory" },
+    ]);
+    await expect(access(join(root, "AGENTS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      readFile(join(root, ".noutify", "instructions", "cursor.md"), "utf8"),
+    ).resolves.toContain("notify waiting --agent generic:cursor");
+  });
+
+  it("rejects an unsafe generic memory file before writing configuration", async () => {
+    const root = await temporaryProject();
+    const memoryPath = join(root, "AGENTS.md");
+    await writeFile(memoryPath, "broken\0memory", "utf8");
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents: ["generic:cursor"],
+        memoryLinks: [
+          { agent: "generic:cursor", relativePath: "AGENTS.md" },
+        ],
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow(/text file/);
+
+    await expect(readFile(memoryPath, "utf8")).resolves.toBe("broken\0memory");
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".noutify.local.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects memory links that are duplicated or not selected", async () => {
+    const root = await temporaryProject();
+    const base = {
+      projectRoot: root,
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const link = { agent: "generic:cursor" as const, relativePath: "AGENTS.md" };
+
+    await expect(
+      setupProject({ ...base, agents: ["generic:cursor"], memoryLinks: [link, link] }),
+    ).rejects.toThrow(/duplicate memory link/);
+    await expect(
+      setupProject({ ...base, agents: ["codex"], memoryLinks: [link] }),
+    ).rejects.toThrow(/not selected/);
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("records an explicitly selected Claude integration with its public path", async () => {
     const root = await temporaryProject();
     const runtime = {

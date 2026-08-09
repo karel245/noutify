@@ -1,4 +1,8 @@
-import type { NativeAgentId } from "../config/integrations.js";
+import type {
+  AgentId,
+  IntegrationMode,
+  NativeAgentId,
+} from "../config/integrations.js";
 import { claudeCodeAdapter } from "./adapters/claude-code.js";
 import { codexAdapter } from "./adapters/codex.js";
 
@@ -19,12 +23,13 @@ export interface AdapterInspection {
 
 export interface AdapterMutation {
   changed: boolean;
+  pending?: boolean;
 }
 
 export interface AgentAdapter {
-  id: NativeAgentId;
-  mode: "native";
-  publicPath: string;
+  id: AgentId;
+  mode: IntegrationMode;
+  publicPath?: string;
   ownedPaths(context: AdapterContext): string[];
   preflight(context: AdapterContext): Promise<void>;
   install(context: AdapterContext): Promise<AdapterMutation>;

@@ -95,6 +95,155 @@ describe("runCli", () => {
     ]);
   });
 
+  it("forwards an explicit generic memory link and installs no native hooks", async () => {
+    const root = await temporaryProject();
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "private_topic_1234567890",
+          "--agent",
+          "generic:cursor",
+          "--memory-link",
+          "generic:cursor=AGENTS.md",
+        ],
+        output.io,
+        { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
+      ),
+    ).toBe(0);
+    expect(output.stderr).toEqual([]);
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      { agent: "generic:cursor", mode: "memory", path: "AGENTS.md" },
+    ]);
+  });
+
+  it("routes confirmed selected generic WAITING notifications silently", async () => {
+    const root = await temporaryProject();
+    const sent: Notification[] = [];
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async (notification: Notification) => {
+        sent.push(notification);
+        return { ok: true, attempts: 1 } as const;
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "generic:cursor",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "notify",
+          "waiting",
+          "--agent",
+          "generic:cursor",
+          "--project",
+          root,
+        ],
+        output.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(sent).toHaveLength(1);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toEqual([]);
+  });
+
+  it("suppresses generic WAITING before confirmation or for an unselected agent", async () => {
+    const root = await temporaryProject();
+    let sends = 0;
+    const dependencies = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+      send: async () => {
+        sends += 1;
+        return { ok: true, attempts: 1 } as const;
+      },
+    };
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "generic:cursor",
+      ],
+      memoryIo().io,
+      dependencies,
+    );
+
+    await runCli(
+      ["notify", "waiting", "--agent", "generic:cursor", "--project", root],
+      memoryIo().io,
+      dependencies,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    await runCli(
+      ["notify", "waiting", "--agent", "generic:other", "--project", root],
+      memoryIo().io,
+      dependencies,
+    );
+    expect(sends).toBe(0);
+  });
+
+  it("keeps malformed or failed generic internal notifications silent", async () => {
+    const root = await temporaryProject();
+    const dependencies = {
+      send: async () => {
+        throw new Error("provider unavailable");
+      },
+    };
+    const malformed = memoryIo();
+    const failed = memoryIo();
+    await runCli(
+      [
+        "setup",
+        "--project",
+        root,
+        "--topic",
+        "private_topic_1234567890",
+        "--agent",
+        "generic:cursor",
+      ],
+      memoryIo().io,
+    );
+    await runCli(["confirm", "--project", root], memoryIo().io);
+
+    expect(await runCli(["notify", "waiting", "--agent"], malformed.io)).toBe(0);
+    expect(
+      await runCli(
+        ["notify", "waiting", "--agent", "generic:cursor", "--project", root],
+        failed.io,
+        dependencies,
+      ),
+    ).toBe(0);
+    expect(malformed.stdout).toEqual([]);
+    expect(malformed.stderr).toEqual([]);
+    expect(failed.stdout).toEqual([]);
+    expect(failed.stderr).toEqual([]);
+  });
+
   it("routes the complete Phase 0 command lifecycle", async () => {
     const root = await temporaryProject();
     const topic = "private_topic_1234567890";
