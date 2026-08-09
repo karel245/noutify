@@ -12,16 +12,23 @@ import {
   validateStoredLanguage,
   type NotificationLanguage,
 } from "./language.js";
+import {
+  normalizeIntegrations,
+  parseAgentId,
+  type AgentId,
+  type IntegrationConfig,
+} from "./integrations.js";
 import { generateFriendlyTopic } from "./topic.js";
 
 export const PUBLIC_CONFIG_FILE = "noutify.config.json";
 export const PRIVATE_CONFIG_FILE = ".noutify.local.json";
 
 export interface PublicProjectConfig {
-  version: 1;
+  version: 2;
   project: { name: string };
   provider: { type: "ntfy" };
   events: { waiting: boolean };
+  integrations: IntegrationConfig[];
 }
 
 export interface PrivateProjectConfig {
@@ -29,6 +36,7 @@ export interface PrivateProjectConfig {
   topic: string;
   language: NotificationLanguage;
   setupCompleted: boolean;
+  automaticReceipts: Partial<Record<AgentId, true>>;
 }
 
 export interface ProjectConfigBundle {
@@ -93,60 +101,138 @@ function validateTopic(value: unknown): string {
   return value;
 }
 
+function validatePublicFields(
+  value: Record<string, unknown>,
+  preserveValues = false,
+): {
+  project: { name: string };
+  provider: { type: "ntfy" };
+  events: { waiting: boolean };
+} {
+  if (!isRecord(value.project)) {
+    throw new Error("public config project is required");
+  }
+  assertOnlyKeys(value.project, ["name"], "public config project");
+  if (
+    !isRecord(value.provider) ||
+    value.provider.type !== "ntfy"
+  ) {
+    throw new Error("public config provider must be ntfy");
+  }
+  assertOnlyKeys(value.provider, ["type"], "public config provider");
+  if (
+    !isRecord(value.events) ||
+    typeof value.events.waiting !== "boolean"
+  ) {
+    throw new Error("public config events.waiting must be boolean");
+  }
+  assertOnlyKeys(value.events, ["waiting"], "public config events");
+  const projectName = validateProjectName(value.project.name);
+  return {
+    project: {
+      name: preserveValues
+        ? value.project.name as string
+        : projectName,
+    },
+    provider: { type: "ntfy" },
+    events: { waiting: value.events.waiting },
+  };
+}
+
+function validatePrivateFields(
+  value: Record<string, unknown>,
+  preserveValues = false,
+): Omit<
+  PrivateProjectConfig,
+  "automaticReceipts"
+> {
+  if (typeof value.setupCompleted !== "boolean") {
+    throw new Error("private config setupCompleted must be boolean");
+  }
+  const server = validateServer(value.server);
+  return {
+    server: preserveValues ? value.server as string : server,
+    topic: validateTopic(value.topic),
+    language: validateStoredLanguage(value.language),
+    setupCompleted: value.setupCompleted,
+  };
+}
+
+function validateAutomaticReceipts(
+  value: unknown,
+): Partial<Record<AgentId, true>> {
+  if (!isRecord(value)) {
+    throw new Error("private config automaticReceipts must be an object");
+  }
+  const receipts: Partial<Record<AgentId, true>> = {};
+  for (const [agent, enabled] of Object.entries(value)) {
+    const agentId = parseAgentId(agent);
+    if (enabled !== true) {
+      throw new Error("private config automaticReceipts values must be true");
+    }
+    receipts[agentId] = true;
+  }
+  return receipts;
+}
+
 export function validateProjectConfig(
   publicValue: unknown,
   privateValue: unknown,
 ): ProjectConfigBundle {
-  if (!isRecord(publicValue) || publicValue.version !== 1) {
-    throw new Error("public config version must be 1");
+  if (!isRecord(publicValue) || (publicValue.version !== 1 && publicValue.version !== 2)) {
+    throw new Error("public config version must be 1 or 2");
   }
-  assertOnlyKeys(
-    publicValue,
-    ["version", "project", "provider", "events"],
-    "public config",
-  );
-  if (!isRecord(publicValue.project)) {
-    throw new Error("public config project is required");
-  }
-  assertOnlyKeys(publicValue.project, ["name"], "public config project");
-  if (
-    !isRecord(publicValue.provider) ||
-    publicValue.provider.type !== "ntfy"
-  ) {
-    throw new Error("public config provider must be ntfy");
-  }
-  assertOnlyKeys(publicValue.provider, ["type"], "public config provider");
-  if (
-    !isRecord(publicValue.events) ||
-    typeof publicValue.events.waiting !== "boolean"
-  ) {
-    throw new Error("public config events.waiting must be boolean");
-  }
-  assertOnlyKeys(publicValue.events, ["waiting"], "public config events");
   if (!isRecord(privateValue)) {
     throw new Error("private config is required");
   }
+
+  if (publicValue.version === 1) {
+    assertOnlyKeys(
+      publicValue,
+      ["version", "project", "provider", "events"],
+      "public config",
+    );
+    assertOnlyKeys(
+      privateValue,
+      ["server", "topic", "language", "setupCompleted"],
+      "private config",
+    );
+    return {
+      public: {
+        version: 2,
+        ...validatePublicFields(publicValue, true),
+        integrations: [{ agent: "claude-code", mode: "native" }],
+      },
+      private: {
+        ...validatePrivateFields(privateValue, true),
+        automaticReceipts: {},
+      },
+    };
+  }
+
+  assertOnlyKeys(
+    publicValue,
+    ["version", "project", "provider", "events", "integrations"],
+    "public config",
+  );
+  if (!Array.isArray(publicValue.integrations)) {
+    throw new Error("public config integrations must be an array");
+  }
   assertOnlyKeys(
     privateValue,
-    ["server", "topic", "language", "setupCompleted"],
+    ["server", "topic", "language", "setupCompleted", "automaticReceipts"],
     "private config",
   );
-  if (typeof privateValue.setupCompleted !== "boolean") {
-    throw new Error("private config setupCompleted must be boolean");
-  }
 
   return {
     public: {
-      version: 1,
-      project: { name: validateProjectName(publicValue.project.name) },
-      provider: { type: "ntfy" },
-      events: { waiting: publicValue.events.waiting },
+      version: 2,
+      ...validatePublicFields(publicValue),
+      integrations: normalizeIntegrations(publicValue.integrations as IntegrationConfig[]),
     },
     private: {
-      server: validateServer(privateValue.server),
-      topic: validateTopic(privateValue.topic),
-      language: validateStoredLanguage(privateValue.language),
-      setupCompleted: privateValue.setupCompleted,
+      ...validatePrivateFields(privateValue),
+      automaticReceipts: validateAutomaticReceipts(privateValue.automaticReceipts),
     },
   };
 }
@@ -157,16 +243,18 @@ export function createInitialConfig(
   const topic = input.topic ?? generateFriendlyTopic();
   return validateProjectConfig(
     {
-      version: 1,
+      version: 2,
       project: { name: input.projectName },
       provider: { type: "ntfy" },
       events: { waiting: true },
+      integrations: [{ agent: "claude-code", mode: "native" }],
     },
     {
       server: input.server ?? "https://ntfy.sh",
       topic,
       language: input.language ?? "en",
       setupCompleted: false,
+      automaticReceipts: {},
     },
   );
 }

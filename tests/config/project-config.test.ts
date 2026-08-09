@@ -8,6 +8,7 @@ import {
   createInitialConfig,
   ensurePrivateIgnore,
   readProjectConfig,
+  validateProjectConfig,
   writeProjectConfig,
 } from "../../src/config/project-config.js";
 
@@ -50,17 +51,73 @@ describe("project configuration", () => {
 
     expect(publicText).not.toContain("private_topic_1234567890");
     expect(JSON.parse(publicText)).toEqual({
-      version: 1,
+      version: 2,
       project: { name: "Demo" },
       provider: { type: "ntfy" },
       events: { waiting: true },
+      integrations: [{ agent: "claude-code", mode: "native" }],
     });
     expect(JSON.parse(privateText)).toEqual({
       server: "https://ntfy.example",
       topic: "private_topic_1234567890",
       language: "es",
       setupCompleted: false,
+      automaticReceipts: {},
     });
+  });
+
+  it("normalizes a valid v1 pair to v2 without changing private values", () => {
+    const v1Public = {
+      version: 1,
+      project: { name: " Demo " },
+      provider: { type: "ntfy" },
+      events: { waiting: true },
+    };
+    const v1Private = {
+      server: "https://ntfy.example/",
+      topic: "private_topic_1234567890",
+      language: "es",
+      setupCompleted: false,
+    };
+
+    expect(validateProjectConfig(v1Public, v1Private)).toMatchObject({
+      public: {
+        version: 2,
+        project: v1Public.project,
+        provider: v1Public.provider,
+        events: v1Public.events,
+        integrations: [{ agent: "claude-code", mode: "native" }],
+      },
+      private: { ...v1Private, automaticReceipts: {} },
+    });
+  });
+
+  it("does not rewrite v1 files while reading their normalized values", async () => {
+    const root = await temporaryProject();
+    const publicText = `${JSON.stringify({
+      version: 1,
+      project: { name: "Demo" },
+      provider: { type: "ntfy" },
+      events: { waiting: true },
+    })}\n`;
+    const privateText = `${JSON.stringify({
+      server: "https://ntfy.example",
+      topic: "private_topic_1234567890",
+      language: "es",
+      setupCompleted: false,
+    })}\n`;
+    const publicPath = join(root, "noutify.config.json");
+    const privatePath = join(root, ".noutify.local.json");
+
+    await writeFile(publicPath, publicText, "utf8");
+    await writeFile(privatePath, privateText, "utf8");
+
+    await expect(readProjectConfig(root)).resolves.toMatchObject({
+      public: { version: 2 },
+      private: { automaticReceipts: {} },
+    });
+    await expect(readFile(publicPath, "utf8")).resolves.toBe(publicText);
+    await expect(readFile(privatePath, "utf8")).resolves.toBe(privateText);
   });
 
   it("uses a friendly topic when none is supplied", () => {
@@ -73,11 +130,16 @@ describe("project configuration", () => {
 
   it("reads legacy private configs without language as English", async () => {
     const root = await temporaryProject();
-    const bundle = createInitialConfig({
-      projectName: "Demo",
-      topic: "private_topic_1234567890",
-    });
-    await writeProjectConfig(root, bundle);
+    await writeFile(
+      join(root, "noutify.config.json"),
+      `${JSON.stringify({
+        version: 1,
+        project: { name: "Demo" },
+        provider: { type: "ntfy" },
+        events: { waiting: true },
+      })}\n`,
+      "utf8",
+    );
     await writeFile(
       join(root, ".noutify.local.json"),
       `${JSON.stringify({
@@ -131,7 +193,7 @@ describe("project configuration", () => {
     await writeFile(join(root, ".noutify.local.json"), "{}\n", "utf8");
 
     await expect(readProjectConfig(root)).rejects.toThrow(
-      "public config version must be 1",
+      "public config version must be 1 or 2",
     );
   });
 
