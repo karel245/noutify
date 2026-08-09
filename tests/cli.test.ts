@@ -69,7 +69,7 @@ describe("runCli", () => {
     expect(output.stderr).toEqual(["duplicate option --project for doctor"]);
   });
 
-  it("forwards explicit repeated agent selections to setup", async () => {
+  it("forwards every explicit native agent selection in canonical installed order", async () => {
     const root = await temporaryProject();
     const output = memoryIo();
 
@@ -80,9 +80,15 @@ describe("runCli", () => {
           "--project",
           root,
           "--agent",
-          "claude-code",
+          "windsurf",
+          "--agent",
+          "copilot-cli",
+          "--agent",
+          "gemini-cli",
           "--agent",
           "codex",
+          "--agent",
+          "claude-code",
         ],
         output.io,
         { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
@@ -92,6 +98,13 @@ describe("runCli", () => {
     expect((await readProjectConfig(root)).public.integrations).toEqual([
       { agent: "claude-code", mode: "native", path: ".claude/settings.local.json" },
       { agent: "codex", mode: "native", path: ".codex/hooks.json" },
+      {
+        agent: "copilot-cli",
+        mode: "native",
+        path: ".github/copilot/settings.local.json",
+      },
+      { agent: "gemini-cli", mode: "native", path: ".gemini/settings.json" },
+      { agent: "windsurf", mode: "native", path: ".windsurf/hooks.json" },
     ]);
   });
 
@@ -331,7 +344,7 @@ describe("runCli", () => {
     ).toBe(0);
   });
 
-  it("confirms one selected agent and renders warnings without failing doctor", async () => {
+  it("confirms every selected native agent and renders one passing receipt per agent", async () => {
     const root = await temporaryProject();
     const dependencies = {
       nodePath: "C:/node.exe",
@@ -346,33 +359,53 @@ describe("runCli", () => {
         "claude-code",
         "--agent",
         "codex",
+        "--agent",
+        "copilot-cli",
+        "--agent",
+        "gemini-cli",
+        "--agent",
+        "windsurf",
       ],
       memoryIo().io,
       dependencies,
     );
     await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+    const agents = [
+      "windsurf",
+      "copilot-cli",
+      "gemini-cli",
+      "codex",
+      "claude-code",
+    ];
     const confirmOutput = memoryIo();
     const doctorOutput = memoryIo();
 
-    expect(
-      await runCli(
-        ["confirm-agent", "codex", "--project", root],
-        confirmOutput.io,
-        dependencies,
-      ),
-    ).toBe(0);
-    expect(confirmOutput.stdout).toEqual([
-      "Automatic receipt confirmed for codex.",
-    ]);
+    for (const agent of agents) {
+      expect(
+        await runCli(
+          ["confirm-agent", agent, "--project", root],
+          confirmOutput.io,
+          dependencies,
+        ),
+      ).toBe(0);
+    }
+    expect(confirmOutput.stdout).toEqual(agents.map(
+      (agent) => `Automatic receipt confirmed for ${agent}.`,
+    ));
     expect(
       await runCli(["doctor", "--project", root], doctorOutput.io, dependencies),
     ).toBe(0);
-    expect(doctorOutput.stdout).toContain(
-      "PASS codex-automatic-receipt: automatic delivery receipt is confirmed",
-    );
-    expect(doctorOutput.stdout).toContain(
-      "WARN claude-code-automatic-receipt: automatic delivery receipt has not been confirmed",
-    );
+    for (const agent of [
+      "claude-code",
+      "codex",
+      "copilot-cli",
+      "gemini-cli",
+      "windsurf",
+    ]) {
+      expect(doctorOutput.stdout).toContain(
+        `PASS ${agent}-automatic-receipt: automatic delivery receipt is confirmed`,
+      );
+    }
   });
 
   it("rejects confirm-agent for an unselected integration without changing config", async () => {

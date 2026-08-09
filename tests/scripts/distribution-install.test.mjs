@@ -172,12 +172,26 @@ describe("lightweight distribution installer", () => {
   });
 
   const windowsIt = process.platform === "win32" ? it : it.skip;
-  windowsIt("installs Codex from a copied artifact with dependencies and networking unavailable", async () => {
+  windowsIt("installs every native adapter from a copied artifact with dependencies and networking unavailable", async () => {
     const { artifact, target } = await packagedCopy();
     const installPath = join(artifact, "install.mjs");
     const result = spawnSync(
       process.execPath,
-      [installPath, "--language", "es", "--agent", "codex"],
+      [
+        installPath,
+        "--language",
+        "es",
+        "--agent",
+        "windsurf",
+        "--agent",
+        "copilot-cli",
+        "--agent",
+        "gemini-cli",
+        "--agent",
+        "codex",
+        "--agent",
+        "claude-code",
+      ],
       {
         cwd: target,
         encoding: "utf8",
@@ -195,15 +209,71 @@ describe("lightweight distribution installer", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(await listRelativeFiles(target, new Set(["Noutify"]))).toEqual([
+      ".claude/settings.local.json",
+      ".claude/skills/noutify/SKILL.md",
+      ".claude/skills/noutify/launcher.mjs",
       ".codex/hooks.json",
+      ".gemini/settings.json",
+      ".github/copilot/settings.local.json",
       ".gitignore",
       ".noutify.local.json",
+      ".windsurf/hooks.json",
       "noutify.config.json",
     ]);
     const publicConfig = JSON.parse(await readFile(join(target, "noutify.config.json"), "utf8"));
     expect(publicConfig.integrations).toEqual([
+      { agent: "claude-code", mode: "native", path: ".claude/settings.local.json" },
       { agent: "codex", mode: "native", path: ".codex/hooks.json" },
+      {
+        agent: "copilot-cli",
+        mode: "native",
+        path: ".github/copilot/settings.local.json",
+      },
+      { agent: "gemini-cli", mode: "native", path: ".gemini/settings.json" },
+      { agent: "windsurf", mode: "native", path: ".windsurf/hooks.json" },
     ]);
+  });
+
+  it("rejects a missing compiled adapter dependency before mutating the target", async () => {
+    const { artifact } = await packagedCopy();
+    const target = join(dirname(artifact), "missing-dependency-target");
+    await rm(join(artifact, "dist", "installer", "adapters", "windsurf.js"));
+    let spawned = false;
+
+    const exitCode = await runDistributionInstall(
+      [
+        "--language",
+        "en",
+        "--agent",
+        "claude-code",
+        "--agent",
+        "codex",
+        "--agent",
+        "copilot-cli",
+        "--agent",
+        "gemini-cli",
+        "--agent",
+        "windsurf",
+        "--project",
+        target,
+      ],
+      {
+        artifactRoot: artifact,
+        platform: "win32",
+        nodeVersion: "24.0.0",
+        nodePath: process.execPath,
+        spawn: () => {
+          spawned = true;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        writeStdout: () => undefined,
+        writeStderr: () => undefined,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(spawned).toBe(false);
+    await expect(readdir(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("detects a changed compiled byte before mutating the target", async () => {

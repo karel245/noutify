@@ -217,7 +217,7 @@ async function createArtifact(root, releaseRoot, compiledRoot) {
   return output;
 }
 
-async function smokeInstallOffline(artifact, root) {
+export async function smokeInstallOffline(artifact, root) {
   const smokeRoot = await mkdtemp(join(tmpdir(), "noutify-package-smoke-"));
   try {
     const target = join(smokeRoot, "Target");
@@ -231,7 +231,15 @@ async function smokeInstallOffline(artifact, root) {
         "--language",
         "en",
         "--agent",
+        "claude-code",
+        "--agent",
         "codex",
+        "--agent",
+        "copilot-cli",
+        "--agent",
+        "gemini-cli",
+        "--agent",
+        "windsurf",
       ],
       {
         cwd: target,

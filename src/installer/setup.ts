@@ -59,6 +59,14 @@ export {
   buildLegacyClaudeHookCommand,
 } from "./adapters/claude-code.js";
 
+const NATIVE_HOOK_SUBCOMMANDS: Readonly<Record<NativeAgentId, string>> = {
+  "claude-code": "claude-stop",
+  codex: "codex-stop",
+  "copilot-cli": "copilot-agent-stop",
+  "gemini-cli": "gemini-after-agent",
+  windsurf: "windsurf-post-response",
+};
+
 export interface SetupProjectInput extends RuntimePaths {
   projectRoot: string;
   agents?: readonly AgentId[];
@@ -439,12 +447,8 @@ async function inferInstalledRuntime(
   const value = await readFile(join(projectRoot, adapter.publicPath), "utf8")
     .then((contents) => JSON.parse(contents) as unknown)
     .catch(() => undefined);
-  const subcommand = adapter.id === "claude-code"
-    ? "claude-stop"
-    : adapter.id === "codex"
-      ? "codex-stop"
-      : undefined;
-  if (value === undefined || subcommand === undefined) return fallback;
+  if (value === undefined) return fallback;
+  const subcommand = NATIVE_HOOK_SUBCOMMANDS[adapter.id as NativeAgentId];
 
   const candidates = new Map<string, RuntimePaths>();
   collectRuntimeCandidates(value, projectRoot, subcommand, candidates);
@@ -484,28 +488,111 @@ function collectRuntimeCandidates(
   }
   if (entry.type === "command" && typeof entry.command === "string") {
     const argumentsList = parsePortableCommand(entry.command);
-    if (
-      argumentsList?.length === 6 &&
-      argumentsList[0] !== undefined &&
-      isAbsolute(argumentsList[0]) &&
-      argumentsList[1] !== undefined &&
-      isAbsolute(argumentsList[1]) &&
-      argumentsList[2] === "hook" &&
-      argumentsList[3] === subcommand &&
-      argumentsList[4] === "--project" &&
-      argumentsList[5] !== undefined &&
-      resolve(argumentsList[5]) === projectRoot
-    ) {
-      const runtime = {
-        nodePath: argumentsList[0],
-        cliPath: argumentsList[1],
-      };
+    const runtime = runtimeFromHookArguments(
+      argumentsList,
+      projectRoot,
+      subcommand,
+    );
+    if (runtime !== undefined) {
+      candidates.set(`${runtime.nodePath}\0${runtime.cliPath}`, runtime);
+    }
+  }
+  for (const command of [entry.command, entry.commandWindows, entry.powershell]) {
+    if (typeof command !== "string") continue;
+    const runtime = runtimeFromHookArguments(
+      parseEncodedPowerShellCommand(command),
+      projectRoot,
+      subcommand,
+    );
+    if (runtime !== undefined) {
       candidates.set(`${runtime.nodePath}\0${runtime.cliPath}`, runtime);
     }
   }
   for (const child of Object.values(entry)) {
     collectRuntimeCandidates(child, projectRoot, subcommand, candidates);
   }
+}
+
+function runtimeFromHookArguments(
+  argumentsList: string[] | undefined,
+  projectRoot: string,
+  subcommand: string,
+): RuntimePaths | undefined {
+  if (
+    argumentsList?.length !== 6 ||
+    argumentsList[0] === undefined ||
+    !isAbsolute(argumentsList[0]) ||
+    argumentsList[1] === undefined ||
+    !isAbsolute(argumentsList[1]) ||
+    argumentsList[2] !== "hook" ||
+    argumentsList[3] !== subcommand ||
+    argumentsList[4] !== "--project" ||
+    argumentsList[5] === undefined ||
+    resolve(argumentsList[5]) !== projectRoot
+  ) {
+    return undefined;
+  }
+  return {
+    nodePath: argumentsList[0],
+    cliPath: argumentsList[1],
+  };
+}
+
+function parseEncodedPowerShellCommand(value: string): string[] | undefined {
+  const prefix =
+    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
+  if (!value.startsWith(prefix)) return undefined;
+  const encoded = value.slice(prefix.length);
+  if (
+    encoded.length === 0 ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+  ) {
+    return undefined;
+  }
+  const script = Buffer.from(encoded, "base64").toString("utf16le");
+  const scriptPrefix = "& ";
+  const scriptSuffix = "; exit $LASTEXITCODE";
+  if (!script.startsWith(scriptPrefix) || !script.endsWith(scriptSuffix)) {
+    return undefined;
+  }
+  return parsePowerShellArguments(
+    script.slice(scriptPrefix.length, -scriptSuffix.length),
+  );
+}
+
+function parsePowerShellArguments(value: string): string[] | undefined {
+  const argumentsList: string[] = [];
+  let index = 0;
+  while (index < value.length) {
+    while (index < value.length && /\s/.test(value[index] as string)) index += 1;
+    if (index >= value.length) break;
+    if (value[index] !== "'") return undefined;
+    index += 1;
+    let argument = "";
+    let closed = false;
+    while (index < value.length) {
+      const character = value[index] as string;
+      if (character !== "'") {
+        argument += character;
+        index += 1;
+        continue;
+      }
+      if (value[index + 1] === "'") {
+        argument += "'";
+        index += 2;
+        continue;
+      }
+      index += 1;
+      closed = true;
+      break;
+    }
+    if (!closed || (index < value.length && !/\s/.test(value[index] as string))) {
+      return undefined;
+    }
+    argumentsList.push(argument);
+  }
+  return argumentsList;
 }
 
 function parsePortableCommand(value: string): string[] | undefined {

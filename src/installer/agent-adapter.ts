@@ -40,21 +40,19 @@ export interface AgentAdapter {
   uninstall(context: AdapterContext): Promise<AdapterMutation>;
 }
 
+export const AVAILABLE_NATIVE_ADAPTERS: ReadonlyMap<NativeAgentId, AgentAdapter> =
+  new Map([
+    ["claude-code", claudeCodeAdapter],
+    ["codex", codexAdapter],
+    ["copilot-cli", copilotCliAdapter],
+    ["gemini-cli", geminiCliAdapter],
+    ["windsurf", windsurfAdapter],
+  ]);
+
 export function nativeAdapter(id: NativeAgentId): AgentAdapter {
-  if (id === "claude-code") {
-    return claudeCodeAdapter;
+  const adapter = AVAILABLE_NATIVE_ADAPTERS.get(id);
+  if (adapter === undefined) {
+    throw new Error(`native adapter is not available: ${id}`);
   }
-  if (id === "codex") {
-    return codexAdapter;
-  }
-  if (id === "gemini-cli") {
-    return geminiCliAdapter;
-  }
-  if (id === "copilot-cli") {
-    return copilotCliAdapter;
-  }
-  if (id === "windsurf") {
-    return windsurfAdapter;
-  }
-  throw new Error(`native adapter is not available: ${id}`);
+  return adapter;
 }

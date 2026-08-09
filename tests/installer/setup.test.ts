@@ -36,14 +36,35 @@ import {
 import { createClaudeCodeAdapter } from "../../src/installer/adapters/claude-code.js";
 import { codexAdapter } from "../../src/installer/adapters/codex.js";
 import { createGenericMemoryAdapter } from "../../src/installer/adapters/generic-memory.js";
-import type { AgentAdapter } from "../../src/installer/agent-adapter.js";
+import {
+  nativeAdapter,
+  type AgentAdapter,
+} from "../../src/installer/agent-adapter.js";
 
 const temporaryRoots: string[] = [];
+const allNativeAgents = [
+  "windsurf",
+  "copilot-cli",
+  "gemini-cli",
+  "codex",
+  "claude-code",
+] as const;
+const canonicalNativeAgents = [
+  "claude-code",
+  "codex",
+  "copilot-cli",
+  "gemini-cli",
+  "windsurf",
+] as const;
 
 async function temporaryProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "noutify-setup-"));
   temporaryRoots.push(root);
   return root;
+}
+
+async function readBytesOrNull(path: string): Promise<Buffer | null> {
+  return readFile(path).catch(() => null);
 }
 
 afterEach(async () => {
@@ -527,6 +548,68 @@ describe("Phase 0 setup lifecycle", () => {
     });
   });
 
+  it("installs and confirms every native adapter in canonical order with independent doctor checks", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/Program Files/nodejs/node.exe",
+      cliPath: "C:/tools/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      agents: allNativeAgents,
+      ...runtime,
+    });
+
+    expect(
+      (await readProjectConfig(root)).public.integrations.map(({ agent }) => agent),
+    ).toEqual(canonicalNativeAgents);
+    const beforeConfirmation = await doctorProject(root, runtime);
+    for (const agent of canonicalNativeAgents) {
+      expect(beforeConfirmation.checks).toContainEqual(expect.objectContaining({
+        name: `${agent}-integration`,
+        status: "pass",
+      }));
+      expect(beforeConfirmation.checks).toContainEqual(expect.objectContaining({
+        name: `${agent}-automatic-receipt`,
+        status: "warn",
+      }));
+    }
+
+    const hookPaths = {
+      "claude-code": join(root, ".claude", "settings.local.json"),
+      codex: join(root, ".codex", "hooks.json"),
+      "copilot-cli": join(root, ".github", "copilot", "settings.local.json"),
+      "gemini-cli": join(root, ".gemini", "settings.json"),
+      windsurf: join(root, ".windsurf", "hooks.json"),
+    } as const;
+    const privatePath = join(root, ".noutify.local.json");
+    const privateBefore = await readFile(privatePath);
+    for (const agent of canonicalNativeAgents) {
+      const hookBytes = await readFile(hookPaths[agent]);
+      await rm(hookPaths[agent]);
+      await expect(confirmAgent(root, agent)).rejects.toThrow(
+        `agent integration is not installed: ${agent}`,
+      );
+      await expect(readFile(privatePath)).resolves.toEqual(privateBefore);
+      await writeFile(hookPaths[agent], hookBytes);
+    }
+
+    for (const agent of allNativeAgents) {
+      await confirmAgent(root, agent);
+    }
+
+    const afterConfirmation = await doctorProject(root, runtime);
+    expect(
+      afterConfirmation.checks
+        .filter(({ name }) => name.endsWith("-automatic-receipt"))
+        .map(({ name, status }) => ({ name, status })),
+    ).toEqual(canonicalNativeAgents.map((agent) => ({
+      name: `${agent}-automatic-receipt`,
+      status: "pass",
+    })));
+  });
+
   it("rejects an explicitly empty agent selection before writing", async () => {
     const root = await temporaryProject();
     const ignorePath = join(root, ".gitignore");
@@ -973,13 +1056,82 @@ describe("Phase 0 setup lifecycle", () => {
     });
   });
 
-  it("restores the whole setup transaction when the second sorted adapter fails", async () => {
+  it("restores every owned byte when any adapter position fails", async () => {
     const root = await temporaryProject();
     const runtime = {
-      nodePath: "C:/node.exe",
-      cliPath: "C:/noutify/dist/cli.js",
+      nodePath: "D:/runtime/node.exe",
+      cliPath: "D:/runtime/noutify/cli.js",
     };
-    await setupProject({ projectRoot: root, agents: ["claude-code"], ...runtime });
+    const agents = [...allNativeAgents, "generic:cursor"] as const;
+    await Promise.all([
+      mkdir(join(root, ".claude"), { recursive: true }),
+      mkdir(join(root, ".codex"), { recursive: true }),
+      mkdir(join(root, ".github", "copilot"), { recursive: true }),
+      mkdir(join(root, ".gemini"), { recursive: true }),
+      mkdir(join(root, ".windsurf"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(root, ".gitignore"), "dist/\n", "utf8"),
+      writeFile(
+        join(root, "noutify.config.json"),
+        `${JSON.stringify({
+          version: 2,
+          project: { name: "Rollback fixture" },
+          provider: { type: "ntfy" },
+          events: { waiting: true },
+          integrations: [
+            { agent: "claude-code", mode: "native", path: ".claude/settings.local.json" },
+            { agent: "codex", mode: "native", path: ".codex/hooks.json" },
+            {
+              agent: "copilot-cli",
+              mode: "native",
+              path: ".github/copilot/settings.local.json",
+            },
+            { agent: "gemini-cli", mode: "native", path: ".gemini/settings.json" },
+            { agent: "generic:cursor", mode: "memory", path: "AGENTS.md" },
+            { agent: "windsurf", mode: "native", path: ".windsurf/hooks.json" },
+          ],
+        }, null, 2)}\n`,
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".noutify.local.json"),
+        `${JSON.stringify({
+          server: "https://ntfy.example",
+          topic: "private_topic_1234567890",
+          language: "en",
+          setupCompleted: false,
+          automaticReceipts: {},
+        }, null, 2)}\n`,
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".claude", "settings.local.json"),
+        '{"permissions":{"allow":["Read"]}}\n',
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".codex", "hooks.json"),
+        '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"other-codex"}]}]}}\n',
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".github", "copilot", "settings.local.json"),
+        '{"hooks":{"agentStop":[{"type":"command","powershell":"other-copilot","timeoutSec":9}]}}\n',
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".gemini", "settings.json"),
+        '{"hooks":{"AfterAgent":[{"hooks":[{"type":"command","command":"other-gemini","timeout":9000}]}]}}\n',
+        "utf8",
+      ),
+      writeFile(
+        join(root, ".windsurf", "hooks.json"),
+        '{"hooks":{"post_cascade_response":[{"command":"other-windsurf","show_output":true}]}}\n',
+        "utf8",
+      ),
+    ]);
+    await writeFile(join(root, "AGENTS.md"), "# Existing agent memory\n", "utf8");
     const paths = [
       join(root, ".gitignore"),
       join(root, "noutify.config.json"),
@@ -989,25 +1141,43 @@ describe("Phase 0 setup lifecycle", () => {
       join(root, ".claude", "skills", "noutify", "SKILL.md"),
       join(root, ".claude", "skills", "noutify", "launcher.mjs"),
       join(root, ".codex", "hooks.json"),
+      join(root, ".github", "copilot", "settings.local.json"),
+      join(root, ".gemini", "settings.json"),
+      join(root, ".windsurf", "hooks.json"),
+      join(root, "AGENTS.md"),
+      join(root, ".noutify", "instructions", "cursor.md"),
     ];
-    const before = await Promise.all(paths.map((path) => readFile(path).catch(() => null)));
-    const failingCodex: AgentAdapter = {
-      ...codexAdapter,
-      install: async (context) => {
-        await codexAdapter.install(context);
-        throw new Error("second adapter failed");
-      },
-    };
+    const before = await Promise.all(paths.map(readBytesOrNull));
 
-    await expect(
-      setupProject(
-        { projectRoot: root, agents: ["codex", "claude-code"], ...runtime },
-        { adapters: [createClaudeCodeAdapter(), failingCodex] },
-      ),
-    ).rejects.toThrow("second adapter failed");
+    for (const failingAgent of [
+      ...canonicalNativeAgents,
+      "generic:cursor",
+    ] as const) {
+      const baseAdapter = failingAgent === "generic:cursor"
+        ? createGenericMemoryAdapter(failingAgent, "AGENTS.md")
+        : nativeAdapter(failingAgent);
+      const failingAdapter: AgentAdapter = {
+        ...baseAdapter,
+        install: async (context) => {
+          await baseAdapter.install(context);
+          throw new Error(`adapter failed: ${failingAgent}`);
+        },
+      };
 
-    const after = await Promise.all(paths.map((path) => readFile(path).catch(() => null)));
-    expect(after).toEqual(before);
+      await expect(
+        setupProject(
+          {
+            projectRoot: root,
+            agents,
+            memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
+            ...runtime,
+          },
+          { adapters: [failingAdapter] },
+        ),
+      ).rejects.toThrow(`adapter failed: ${failingAgent}`);
+
+      await expect(Promise.all(paths.map(readBytesOrNull))).resolves.toEqual(before);
+    }
   });
 
   it("uninstalls every configured exact-owned integration and preserves config", async () => {
@@ -1020,10 +1190,48 @@ describe("Phase 0 setup lifecycle", () => {
     await writeFile(memoryPath, "# Existing instructions\n", "utf8");
     await setupProject({
       projectRoot: root,
-      agents: ["claude-code", "codex", "generic:cursor"],
+      agents: [...allNativeAgents, "generic:cursor"],
       memoryLinks: [{ agent: "generic:cursor", relativePath: "AGENTS.md" }],
       ...runtime,
     });
+    const hookFixtures = [
+      {
+        path: join(root, ".claude", "settings.local.json"),
+        arrayPath: ["hooks", "Stop"] as const,
+        unrelated: {
+          hooks: [{ type: "command", command: "other-claude", timeout: 12 }],
+        },
+      },
+      {
+        path: join(root, ".codex", "hooks.json"),
+        arrayPath: ["hooks", "Stop"] as const,
+        unrelated: { hooks: [{ type: "command", command: "other-codex" }] },
+      },
+      {
+        path: join(root, ".github", "copilot", "settings.local.json"),
+        arrayPath: ["hooks", "agentStop"] as const,
+        unrelated: { type: "command", powershell: "other-copilot", timeoutSec: 9 },
+      },
+      {
+        path: join(root, ".gemini", "settings.json"),
+        arrayPath: ["hooks", "AfterAgent"] as const,
+        unrelated: {
+          hooks: [{ type: "command", command: "other-gemini", timeout: 9000 }],
+        },
+      },
+      {
+        path: join(root, ".windsurf", "hooks.json"),
+        arrayPath: ["hooks", "post_cascade_response"] as const,
+        unrelated: { command: "other-windsurf", show_output: true },
+      },
+    ];
+    for (const fixture of hookFixtures) {
+      const value = JSON.parse(await readFile(fixture.path, "utf8")) as Record<string, unknown>;
+      const hooks = value[fixture.arrayPath[0]] as Record<string, unknown>;
+      (hooks[fixture.arrayPath[1]] as unknown[]).unshift(fixture.unrelated);
+      value.preferences = { preserve: true };
+      await writeFile(fixture.path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    }
     const publicPath = join(root, "noutify.config.json");
     const privatePath = join(root, ".noutify.local.json");
     const configBefore = await Promise.all([
@@ -1042,23 +1250,20 @@ describe("Phase 0 setup lifecycle", () => {
     ])).resolves.toEqual(configBefore);
     await expect(readFile(memoryPath, "utf8")).resolves.toBe("# Existing instructions\n");
     await expect(hasClaudeSkill(root, runtime)).resolves.toBe(false);
-    await expect(
-      readFile(join(root, ".codex", "hooks.json"), "utf8"),
-    ).resolves.not.toContain("codex-stop");
+    for (const fixture of hookFixtures) {
+      const value = JSON.parse(await readFile(fixture.path, "utf8")) as Record<string, unknown>;
+      const hooks = value[fixture.arrayPath[0]] as Record<string, unknown>;
+      expect(hooks[fixture.arrayPath[1]]).toEqual([fixture.unrelated]);
+      expect(value.preferences).toEqual({ preserve: true });
+    }
     const diagnosis = await doctorProject(root, runtime);
     expect(diagnosis.ok).toBe(false);
-    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
-      name: "claude-code-integration",
-      status: "fail",
-    }));
-    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
-      name: "codex-integration",
-      status: "fail",
-    }));
-    expect(diagnosis.checks).toContainEqual(expect.objectContaining({
-      name: "generic:cursor-integration",
-      status: "fail",
-    }));
+    for (const agent of [...canonicalNativeAgents, "generic:cursor"] as const) {
+      expect(diagnosis.checks).toContainEqual(expect.objectContaining({
+        name: `${agent}-integration`,
+        status: "fail",
+      }));
+    }
   });
 
   it("rejects uninstall through a native junction without touching outside bytes", async () => {

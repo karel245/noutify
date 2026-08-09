@@ -121,6 +121,30 @@ describe("minimal distribution packaging", () => {
     expect(JSON.stringify(manifest)).not.toContain("Noutify-");
   });
 
+  it("runs the offline package smoke with every native adapter selected", async () => {
+    const artifact = await mkdtemp(join(tmpdir(), "noutify-smoke-artifact-"));
+    temporaryRoots.push(artifact);
+    await writeFile(
+      join(artifact, "install.mjs"),
+      `
+        const agents = [];
+        for (let index = 2; index < process.argv.length; index += 1) {
+          if (process.argv[index] === "--agent") agents.push(process.argv[index + 1]);
+        }
+        const expected = ["claude-code", "codex", "copilot-cli", "gemini-cli", "windsurf"];
+        if (JSON.stringify(agents) !== JSON.stringify(expected)) {
+          process.stderr.write(JSON.stringify({ agents, expected }));
+          process.exitCode = 7;
+        }
+      `,
+      "utf8",
+    );
+
+    await expect(
+      packaging.smokeInstallOffline(artifact, repositoryRoot),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects every release output except the exact repository release folder", () => {
     const root = resolve("C:\\safe\\repository");
 
