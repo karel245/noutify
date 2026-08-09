@@ -4,11 +4,24 @@ Noutify sends short, private phone notifications when a coding agent returns
 control. It never sends prompts, transcripts, or response content. `WAITING`
 means an agent turn ended; it does not mean that work is complete.
 
+## Generate the release folder
+
+`release/Noutify/` is generated locally and ignored by Git; it is not currently
+published or downloadable from this repository. A maintainer creates it from a
+source checkout:
+
+```text
+git clone https://github.com/karel245/noutify.git
+cd noutify
+npm ci
+npm run package
+```
+
+Copy the resulting `release/Noutify/` folder directly into the target project.
+
 ## Install in one prompt
 
-1. Download the generated `Noutify/` release folder from this repository and
-   place it directly inside the project that will use it.
-2. Open any capable coding agent from that project and send exactly:
+Open any capable coding agent from that project and send exactly:
 
    ```text
    Install Noutify following Noutify/SETUP.md.
@@ -26,7 +39,7 @@ then install it again at the new location.
 
 | Platform | Status | What it means |
 | --- | --- | --- |
-| Codex | native verified | Project-local Stop hook; owner must trust it through `/hooks` and confirm a real receipt. |
+| Codex | native unverified | Project-local Stop hook; owner must trust it through `/hooks` and confirm a later real-turn receipt before relying on it. |
 | Claude Code | native unverified | Project-local Stop hook and language skill; confirm a real receipt before relying on it. |
 | Other agents with durable project instructions | memory best effort | An explicit memory file can hold one managed instruction; it is not a reliable lifecycle hook. |
 | Gemini CLI, GitHub Copilot CLI, Windsurf | unsupported or untested | Planned native adapters; this release does not install them. |

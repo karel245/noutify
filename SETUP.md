@@ -5,8 +5,9 @@ for `.noutify.local.json`.
 
 1. Use the user's latest clear request language, then their established
    conversation language, then the operating-system UI language, then English.
-   Select `es` for Spanish and `en` otherwise. Never translate commands, paths,
-   or JSON.
+   Select `es` for Spanish. For every other interaction language select `en`
+   and explain, in that language, that notifications will be in English. Never
+   translate commands, paths, or JSON.
 2. Detect and propose the current platform, but ask: “Which agents will use
    Noutify in this project?” The user may select `codex`, `claude-code`, or
    `generic:<lowercase-agent-name>`, including multiple selections.

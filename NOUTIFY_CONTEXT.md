@@ -20,7 +20,8 @@ It has no Noutify service, account, telemetry, transcript store, or mobile app.
 compiled runtime, manifest, license, setup contract, and recovery guide. Its
 installer validates the manifest, Windows, and Node.js 24+ before calling the
 compiled CLI. A target project never runs npm, source compilation, type checks,
-or repository tests.
+or repository tests. The artifact is generated locally with `npm run package`,
+ignored by Git, and is not yet published or downloadable from the repository.
 
 Public configuration records selected integrations and safe project settings.
 Private `.noutify.local.json` holds the topic and is ignored by Git. Topics,
@@ -42,8 +43,9 @@ Install Noutify following Noutify/SETUP.md.
 
 The executing agent uses the latest clear user-request language, then the
 established conversation language, then OS UI language, then English. Spanish
-selects `es`; all other cases select `en`. It proposes the current platform but
-asks for explicit one-or-more agent selections.
+selects `es`; all other interaction languages select `en` and receive an
+interaction-language explanation that notifications will use English. It
+proposes the current platform but asks for explicit one-or-more agent selections.
 
 After a new installation, the topic is shown once only. The owner subscribes,
 receives a manual localized test, explicitly confirms it, and checks `doctor`.
@@ -61,7 +63,7 @@ in its installed position until explicit uninstall.
 
 | Platform | Current claim |
 | --- | --- |
-| Codex | native verified after project-local hook trust and explicit receipt |
+| Codex | native unverified until project-local hook trust and later real-turn receipt are recorded |
 | Claude Code | native unverified until real-turn acceptance is recorded |
 | Generic durable-memory agent | memory best effort |
 | Gemini CLI, GitHub Copilot CLI, Windsurf | unsupported or untested until Plan 2 |
