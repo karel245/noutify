@@ -7,6 +7,7 @@ import { claudeCodeAdapter } from "./adapters/claude-code.js";
 import { codexAdapter } from "./adapters/codex.js";
 import { copilotCliAdapter } from "./adapters/copilot-cli.js";
 import { geminiCliAdapter } from "./adapters/gemini-cli.js";
+import { windsurfAdapter } from "./adapters/windsurf.js";
 
 export interface RuntimePaths {
   nodePath: string;
@@ -51,6 +52,9 @@ export function nativeAdapter(id: NativeAgentId): AgentAdapter {
   }
   if (id === "copilot-cli") {
     return copilotCliAdapter;
+  }
+  if (id === "windsurf") {
+    return windsurfAdapter;
   }
   throw new Error(`native adapter is not available: ${id}`);
 }

@@ -707,6 +707,94 @@ describe("runCli", () => {
     }
   });
 
+  it.each([
+    [
+      "valid",
+      JSON.stringify({
+        agent_action_name: "post_cascade_response",
+        tool_info: { response: "private response" },
+        workspace_root: "C:/spoofed/project",
+      }),
+      false,
+      1,
+    ],
+    [
+      "wrong event",
+      '{"agent_action_name":"pre_cascade_response"}',
+      false,
+      0,
+    ],
+    ["malformed", "not-json", false, 0],
+    [
+      "send failure",
+      '{"agent_action_name":"post_cascade_response"}',
+      true,
+      1,
+    ],
+  ])(
+    "keeps a Windsurf %s hook silent and successful",
+    async (_label, input, rejectSend, expectedAttempts) => {
+      const root = await temporaryProject();
+      const sent: Notification[] = [];
+      let sendAttempts = 0;
+      const dependencies = {
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+        send: async (notification: Notification) => {
+          sendAttempts += 1;
+          sent.push(notification);
+          if (rejectSend) throw new Error("provider unavailable");
+          return { ok: true, attempts: 1 } as const;
+        },
+      };
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "private_topic_1234567890",
+          "--agent",
+          "windsurf",
+        ],
+        memoryIo().io,
+        dependencies,
+      );
+      await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+      const hookIo = memoryIo(input);
+
+      expect(
+        await runCli(
+          ["hook", "windsurf-post-response", "--project", root],
+          hookIo.io,
+          dependencies,
+        ),
+      ).toBe(0);
+      expect(sendAttempts).toBe(expectedAttempts);
+      expect(hookIo.stdout).toEqual([]);
+      expect(hookIo.stderr).toEqual([]);
+      expect(JSON.stringify(sent)).not.toContain("private response");
+      expect(JSON.stringify(sent)).not.toContain("spoofed");
+      if (expectedAttempts > 0) {
+        expect(sent[0]?.message).toContain(basename(root));
+      }
+    },
+  );
+
+  it("keeps invalid Windsurf hook arguments and missing projects silent", async () => {
+    for (const argv of [
+      ["hook", "windsurf-post-response", "--project"],
+      ["hook", "windsurf-post-response", "--unknown", "value"],
+      ["hook", "windsurf-post-response", "unexpected"],
+      ["hook", "windsurf-post-response", "--project", "C:/missing"],
+    ]) {
+      const output = memoryIo('{"agent_action_name":"post_cascade_response"}');
+      expect(await runCli(argv, output.io)).toBe(0);
+      expect(output.stdout).toEqual([]);
+      expect(output.stderr).toEqual([]);
+    }
+  });
+
   it("passes stored Spanish language to the silent Stop hook", async () => {
     const root = await temporaryProject();
     const sent: Notification[] = [];

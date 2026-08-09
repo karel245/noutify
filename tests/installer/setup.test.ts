@@ -548,27 +548,6 @@ describe("Phase 0 setup lifecycle", () => {
     });
   });
 
-  it("rejects an unimplemented native adapter before snapshots or writes", async () => {
-    const root = await temporaryProject();
-    const settingsPath = join(root, ".claude", "settings.local.json");
-    await mkdir(join(root, ".claude"), { recursive: true });
-    await writeFile(settingsPath, "not-json\n", "utf8");
-
-    await expect(
-      setupProject({
-        projectRoot: root,
-        agents: ["windsurf"],
-        nodePath: "C:/node.exe",
-        cliPath: "C:/noutify/dist/cli.js",
-      }),
-    ).rejects.toThrow("native adapter is not available: windsurf");
-
-    await expect(readFile(settingsPath, "utf8")).resolves.toBe("not-json\n");
-    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("runs every selected adapter preflight before the first installation write", async () => {
     const root = await temporaryProject();
     const rejectingCodex: AgentAdapter = {

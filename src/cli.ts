@@ -11,6 +11,7 @@ import { parseCodexStopPayload } from "./agents/codex/stop.js";
 import { parseCopilotAgentStopPayload } from "./agents/copilot-cli/agent-stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
 import { parseGeminiAfterAgentPayload } from "./agents/gemini-cli/after-agent.js";
+import { parseWindsurfPostResponsePayload } from "./agents/windsurf/post-cascade-response.js";
 import type { Notification } from "./core/types.js";
 import {
   confirmAgent,
@@ -276,6 +277,31 @@ async function runCopilotAgentStopHook(
   return 0;
 }
 
+async function runWindsurfPostResponseHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runWaitingHook(input, {
+      agent: "windsurf",
+      projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: parseWindsurfPostResponsePayload,
+      send: (notification) => sender(notification, bundle.private),
+    });
+  } catch {
+    // Windsurf hooks must remain silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
 async function runGenericWaitingNotification(
   projectRoot: string,
   agentValue: string | undefined,
@@ -448,6 +474,9 @@ export async function runCli(
         }
         if (parsed.subcommand === "copilot-agent-stop") {
           return runCopilotAgentStopHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "windsurf-post-response") {
+          return runWindsurfPostResponseHook(projectRoot, io, runtime.send);
         }
         return 0;
       case "notify":
