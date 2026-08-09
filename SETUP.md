@@ -71,8 +71,8 @@ location after setup. Do not read, print, request, or copy
 | --- | --- | --- | --- |
 | `claude-code` | `.claude/settings.local.json` plus the Noutify project skill | `Stop` | Reload Claude Code so it reads the project hook and skill. |
 | `codex` | `.codex/hooks.json` | `Stop` | Open `/hooks`, review the project-local Noutify command hook, and trust it. Do not bypass trust. |
-| `gemini-cli` | `.gemini/settings.json` | `AfterAgent` | Reload Gemini CLI after it reads the project settings. |
-| `copilot-cli` | `.github/copilot/settings.local.json` | `agentStop` | Use local GitHub Copilot CLI and reload its project settings. Copilot cloud is unsupported and untested. |
+| `gemini-cli` | `.gemini/settings.json` | `AfterAgent` | Review the new project-hook security warning and its source in the `/hooks` panel, inspect and approve it, then start or restart Gemini CLI. |
+| `copilot-cli` | `.github/copilot/settings.local.json` | `agentStop` | Start or restart GitHub Copilot CLI; hook configuration is loaded at startup. Copilot cloud is unsupported and untested. |
 | `windsurf` | `.windsurf/hooks.json` | `post_cascade_response` | Reload Windsurf Cascade after it reads the project hook. |
 
 Every native adapter remains **native unverified** until the manual phone gate,
@@ -88,6 +88,5 @@ used for durable project-memory agents only after the owner identifies the
 memory file. Cursor, OpenCode, and Cline have no native adapter in this release;
 do not describe them as automatically supported or native verified.
 
-For exact platform hook behavior, use the linked official references in
-[README.md](README.md#official-platform-references). Read
-[troubleshooting](docs/setup-troubleshooting.md) only for recovery.
+For exact platform hook behavior and official references, read
+[troubleshooting](docs/setup-troubleshooting.md) only when recovery is needed.

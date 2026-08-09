@@ -41,8 +41,8 @@ then install it again at the new location.
 | --- | --- | --- |
 | Claude Code | native unverified | Project-local `Stop` hook and Noutify skill are installed; a later real-turn receipt and `confirm-agent claude-code` are still required. |
 | Codex | native unverified | Project-local `Stop` hook is installed; the owner must review and trust it through `/hooks`, then confirm a later real-turn receipt. |
-| Gemini CLI | native unverified | Project-local `AfterAgent` hook is installed; reload, receive a real later-turn notification, and confirm it before relying on it. |
-| GitHub Copilot CLI (local) | native unverified | Project-local `agentStop` hook is installed for the local CLI only; Copilot cloud is unsupported and untested. |
+| Gemini CLI | native unverified | Project-local `AfterAgent` hook is installed; review the new project-hook security warning and its source in the `/hooks` panel, inspect and approve it, then start or restart Gemini CLI before a later real-turn receipt. |
+| GitHub Copilot CLI (local) | native unverified | Project-local `agentStop` hook is installed for the local CLI only. Start or restart GitHub Copilot CLI; hook configuration is loaded at startup. Copilot cloud is unsupported and untested. |
 | Windsurf Cascade | native unverified | Project-local `post_cascade_response` hook is installed; reload, receive a real later-turn notification, and confirm it before relying on it. |
 | Durable-memory agents | memory best effort | An explicit project-memory file can contain one managed instruction; it is not a lifecycle hook. |
 | Cursor, OpenCode, Cline, Copilot cloud | unsupported or untested | No native automatic-notification claim is made. |
