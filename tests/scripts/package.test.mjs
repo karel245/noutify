@@ -61,14 +61,6 @@ async function expectedCompiledPaths(root) {
     .sort();
 }
 
-async function temporaryBuildFolders() {
-  return new Set(
-    (await readdir(tmpdir(), { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith("noutify-build-"))
-      .map((entry) => entry.name),
-  );
-}
-
 describe("minimal distribution packaging", () => {
   it("builds a clean checkout and ships exactly the allowlisted runtime", async () => {
     const root = await fixtureRoot();
@@ -159,13 +151,28 @@ describe("minimal distribution packaging", () => {
   it("removes the isolated build folder when compilation fails", async () => {
     const root = await fixtureRoot();
     await writeFile(join(root, "src", "broken.ts"), "export const broken = ;\n", "utf8");
-    const before = await temporaryBuildFolders();
+    const temporaryRoot = await mkdtemp(join(tmpdir(), "noutify-package-test-"));
+    temporaryRoots.push(temporaryRoot);
 
     await expect(
-      packaging.packageDistribution({ runQualityGates: false, root }),
+      packaging.packageDistribution({ runQualityGates: false, root, temporaryRoot }),
     ).rejects.toThrow("build failed");
 
-    expect(await temporaryBuildFolders()).toEqual(before);
+    expect(await readdir(temporaryRoot)).toEqual([]);
+  });
+
+  it("rejects an unavailable caller-owned temporary build parent", async () => {
+    const root = await fixtureRoot();
+    const temporaryRoot = join(root, "not-a-directory");
+    await writeFile(temporaryRoot, "not a directory\n", "utf8");
+
+    await expect(
+      packaging.packageDistribution({
+        runQualityGates: false,
+        root,
+        temporaryRoot,
+      }),
+    ).rejects.toThrow("temporary build root must be an existing directory");
   });
 
   it("propagates network denial into Node children launched by the installer", () => {

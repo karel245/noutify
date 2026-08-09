@@ -1,45 +1,60 @@
-# Install Noutify
+# Noutify installation contract
 
-Follow this state machine from the target project's root. Do not ask for paths
-or read `.noutify.local.json`.
+Use this contract from the target project's root. Do not read, print, or ask
+for `.noutify.local.json`.
 
-## Language
+1. Use the user's latest clear request language, then their established
+   conversation language, then the operating-system UI language, then English.
+   Select `es` for Spanish and `en` otherwise. Never translate commands, paths,
+   or JSON.
+2. Detect and propose the current platform, but ask: “Which agents will use
+   Noutify in this project?” The user may select `codex`, `claude-code`, or
+   `generic:<lowercase-agent-name>`, including multiple selections.
+3. For a generic agent, ask for its durable project-memory file. If known, add
+   `--memory-link generic:<name>=<project-relative-file>`; otherwise continue
+   without it and report pending, best-effort integration. Never guess a path.
+4. Run the installer with explicit selections, for example:
 
-Use the latest clear user request or established conversation language. Otherwise
-inspect `[System.Globalization.CultureInfo]::CurrentUICulture`. Map Spanish to
-`es` and English to `en`; otherwise use English notifications. For an unsupported
-interaction language, use English notifications and tell the user in the interaction
-language that notifications will use English. Commands and JSON stay unchanged.
+   ```text
+   node Noutify/install.mjs --language es --agent codex --agent claude-code
+   ```
 
-## Prepare
+   A generic memory link looks like:
 
-Run one command: `node Noutify/scripts/install.mjs --language <es|en>`. Read
-only its final JSON record. For `created`, Show the new topic once in the
-interaction language and tell the user in the interaction language that it is
-private because it functions as the notification key. Never repeat the topic after
-that display in chat, logs, summaries, commits, docs, issues, diagnostics,
-artifacts, or generated files. For `existing` or any failure, use the conditional
-guide below.
+   ```text
+   node Noutify/install.mjs --language en --agent generic:cursor --memory-link generic:cursor=AGENTS.md
+   ```
 
-## Subscribe
+   Read only the final JSON record. For `created`, display its topic once,
+   explain that it is a private notification key, and never repeat it in text,
+   files, logs, or summaries. For `existing`, never display a topic.
+5. Ask the owner to subscribe their ntfy app and pause for confirmation. Then run:
 
-Ask the user to subscribe their ntfy app to the displayed topic. Pause. Do not
-run a test until they say the subscription is ready.
+   ```text
+   node Noutify/dist/cli.js test
+   ```
 
-## Test and confirm
+   Wait for explicit receipt of the localized manual test, then run:
 
-Run `node Noutify/dist/cli.js test`. Pause for the phone owner's explicit
-receipt of the localized test notification. Only then run
-`node Noutify/dist/cli.js confirm`, followed by `node Noutify/dist/cli.js doctor`.
+   ```text
+   node Noutify/dist/cli.js confirm
+   node Noutify/dist/cli.js doctor
+   ```
 
-## Accept
+6. For Codex, have the owner review and trust the project-local hook through
+   `/hooks`. Do not bypass trust. Finish a later real turn, wait for explicit
+   automatic receipt, then run:
 
-Report configuration success only when `doctor` passes after that explicit receipt.
-Automatic Stop-hook phone acceptance remains pending until the owner observes a real
-Stop notification. Later, `/noutify language español` or
-`/noutify language english` changes notification language.
+   ```text
+   node Noutify/dist/cli.js confirm-agent codex
+   node Noutify/dist/cli.js doctor
+   ```
 
-## On failure
+   Manual and automatic receipts are separate gates. For Claude Code, repeat
+   the real-turn receipt and `confirm-agent claude-code` flow. Generic memory
+   is best effort; confirm it only after the owner sees an automatic receipt.
 
-For a failed command, `existing` record, missing topic, or collision, read
-`docs/setup-troubleshooting.md`. Do not load it on the created happy path.
+Keep the `Noutify/` folder in place. Its project-local integrations call its
+compiled runtime. Read [troubleshooting](docs/setup-troubleshooting.md) only
+for recovery. Gemini CLI, GitHub Copilot CLI, and Windsurf are not installable
+native adapters in this release.

@@ -1,58 +1,68 @@
 # Noutify setup troubleshooting
 
-Use this guide only when the compact setup flow does not produce a new,
-successful record. Keep private values out of chat, logs, and generated files.
+Use this guide only when the normal contract in [SETUP.md](../SETUP.md) cannot
+finish. Keep topics and `.noutify.local.json` out of chat, logs, commits, and
+generated files.
 
-## Prerequisites
+## Before retrying
 
-Run setup from the target project's root, with `Noutify/` directly inside it.
-The validated path needs Windows, Node.js 24 or newer, npm, Claude Code
-project-local hooks, and an ntfy-compatible phone app. The installer verifies
-the Noutify source and runs `npm ci`, `npm test`, `npm run typecheck`, and
-`npm run build` before it changes the target.
+The supported target path is Windows with Node.js 24 or newer. The release
+folder must remain `Noutify/` inside the target project and must retain its
+`manifest.json`, `install.mjs`, and `dist/` files. Target installation validates
+the release manifest and uses no package manager, source compilation, or test
+suite.
 
-## Setup recovery
+Use explicit agent values. This release installs native adapters only for
+`codex` and `claude-code`. A generic agent uses `generic:<lowercase-name>`;
+provide `--memory-link` only when the owner identifies a real project-relative
+memory file. Gemini CLI, GitHub Copilot CLI, and Windsurf must not be selected
+until their adapters are shipped.
 
-Read the installer's `FAIL <stage>` message and correct that prerequisite or
-failing project condition. Re-run the same compact installer command from the
-target root. Do not substitute manual paths or bypass a failed stage. Malformed
-Claude settings and incomplete public/private Noutify configuration need manual
-repair; do not replace unrelated settings.
+## Installer failure
 
-## Existing installation
+Read the final installer error, correct that specific prerequisite, and rerun
+the same command. Do not bypass a manifest failure or manually edit a protected
+hook file. Unsupported agent identifiers, malformed hook settings, modified
+Noutify-owned files, or unsafe memory paths stop before partial installation.
 
-An `existing` final JSON record means the configuration and owned hook already
-exist; it intentionally contains no topic. Preserve the installation and its
-unrelated hooks. Continue with the phone gates only if its owner can verify the
-subscription; otherwise use topic recovery. Run `doctor` after any explicit
-phone receipt.
+If setup returns `existing`, it intentionally does not reveal a topic. The
+owner may inspect their own `.noutify.local.json` locally to subscribe a device,
+but an agent must never open, copy, or request that value. If the owner cannot
+recover it, request explicit approval before any reset or replacement.
 
-## Topic recovery
+## Phone and automatic-receipt gates
 
-Ask the owner to inspect `.noutify.local.json` locally and enter its topic in
-their ntfy app. Never open, copy, print, or request that value in chat. If it
-cannot be recovered, stop and ask whether the owner wants an explicit reset;
-do not invent or expose a replacement topic.
+Run `node Noutify/dist/cli.js test` only after the owner has subscribed. A
+successful command proves only an attempted manual notification; wait for the
+owner's receipt before `node Noutify/dist/cli.js confirm`. Then inspect:
 
-## Skill collision
+```text
+node Noutify/dist/cli.js doctor
+```
 
-If `.claude/skills/noutify/SKILL.md` or its `launcher.mjs` is occupied by
-unrecognized content, setup stops to protect it. Do not overwrite it. Ask the
-owner whether to preserve, rename, or remove that separate file, then re-run
-setup. The Noutify-owned skill accepts `/noutify language español` and
-`/noutify language english`.
+`WARN` means a confirmation is still needed, while `FAIL` means configuration
+or an installed integration needs repair. For Codex, the owner must trust the
+project-local entry through `/hooks`, finish a later real turn, explicitly
+report receipt, and only then run:
 
-## Moving Noutify
+```text
+node Noutify/dist/cli.js confirm-agent codex
+```
 
-To relocate the runtime, uninstall while the original Noutify path still exists,
-move the folder, then run setup again. If the folder was already moved, restore
-its old path first, uninstall there, and only then move it and rerun setup. This
-strict sequence lets Noutify recognize only the exact paths it published and
-prevents an unrelated hook or skill from being removed.
+Claude Code follows the equivalent real-turn and
+`confirm-agent claude-code` process. A generic memory integration remains
+pending without an explicit memory file and remains best effort even after a
+link is present.
 
-## Uninstall
+## Moving or uninstalling
 
-Only on an explicit request, run `node Noutify/dist/cli.js uninstall` from the
-target root. It removes only the exact Noutify-owned Stop hook and skill files,
-including `SKILL.md` and `launcher.mjs`, while preserving unrelated Claude
-configuration and Noutify configuration files.
+While the original `Noutify/` folder is still present, run:
+
+```text
+node Noutify/dist/cli.js uninstall
+```
+
+Then move the folder and run the installation contract again. If it was already
+moved, restore it at the original path before uninstalling. Uninstall removes
+only exact Noutify-owned hooks, skills, instructions, and memory blocks; it
+preserves unrelated agent configuration and Noutify configuration files.

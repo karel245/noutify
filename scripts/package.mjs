@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import {
   copyFile,
   cp,
@@ -125,8 +125,21 @@ function findToolingRoot(root) {
   throw new Error("TypeScript compiler is unavailable");
 }
 
-async function compileIsolatedRuntime(root) {
-  const temporaryRoot = resolve(tmpdir());
+async function compileIsolatedRuntime(root, callerTemporaryRoot) {
+  const temporaryRoot = resolve(callerTemporaryRoot ?? tmpdir());
+  try {
+    if (!statSync(temporaryRoot).isDirectory()) {
+      throw new Error("temporary build root must be an existing directory");
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "temporary build root must be an existing directory"
+    ) {
+      throw error;
+    }
+    throw new Error("temporary build root must be an existing directory");
+  }
   const buildRoot = validateTemporaryBuildPath(
     temporaryRoot,
     await mkdtemp(join(temporaryRoot, "noutify-build-")),
@@ -246,7 +259,7 @@ export async function packageDistribution(options = {}) {
   const root = resolve(options.root ?? moduleRoot);
   const runGates = options.runQualityGates !== false;
   if (runGates) runQualityGates(root);
-  const build = await compileIsolatedRuntime(root);
+  const build = await compileIsolatedRuntime(root, options.temporaryRoot);
   try {
     const artifact = await createArtifact(
       root,
