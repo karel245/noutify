@@ -3,6 +3,12 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { assertSafeProjectPath } from "../core/project-path.js";
+import {
+  installJsonHook,
+  preflightJsonHook,
+  uninstallJsonHook,
+  type JsonHookFileSpec,
+} from "./json-hook-file.js";
 
 const CODEX_HOOKS_PATH = join(".codex", "hooks.json");
 
@@ -137,6 +143,37 @@ function isOwnedEntry(entry: unknown, command: CodexHookCommand): boolean {
   );
 }
 
+function codexStopSpec(
+  command: CodexHookCommand,
+): JsonHookFileSpec<{ hooks: [CodexHookCommand] }> {
+  return {
+    relativePath: CODEX_HOOKS_PATH,
+    arrayPath: ["hooks", "Stop"],
+    owned: { hooks: [command] },
+    isOwned: (entry) => isOwnedEntry(entry, command),
+    errorLabel: "Codex hooks",
+  };
+}
+
+function canUseDirectMerge(
+  entries: unknown[],
+  command: CodexHookCommand,
+  legacyCommands: readonly LegacyCodexHookCommand[],
+): boolean {
+  const currentCount = entries.reduce<number>(
+    (count, entry) => count + countInEntry(entry, command),
+    0,
+  );
+  const ownedCount = entries.reduce<number>(
+    (count, entry) => count + countInEntry(entry, command, legacyCommands),
+    0,
+  );
+  const exactEntries = entries.filter((entry) => isOwnedEntry(entry, command));
+  return ownedCount === currentCount && (
+    currentCount === 0 || exactEntries.length === currentCount
+  );
+}
+
 function withoutOwnedCommand(
   entries: unknown[],
   command: CodexHookCommand,
@@ -177,6 +214,7 @@ export async function countCodexStopHooks(
   command: CodexHookCommand,
   legacyCommands: readonly LegacyCodexHookCommand[] = [],
 ): Promise<number> {
+  await preflightJsonHook(projectRoot, codexStopSpec(command));
   const file = await readCodexHooks(projectRoot);
   return stopEntries(file.value).reduce<number>(
     (count, entry) => count + countInEntry(entry, command, legacyCommands),
@@ -207,6 +245,10 @@ export async function installCodexStopHook(
     return { changed: false };
   }
 
+  if (canUseDirectMerge(entries, command, legacyCommands)) {
+    return installJsonHook(projectRoot, codexStopSpec(command));
+  }
+
   const next = structuredClone(file.value);
   const hooks = "hooks" in next ? next.hooks : {};
   if (!isRecord(hooks)) throw new Error("Codex hooks hooks must be an object");
@@ -233,6 +275,10 @@ export async function uninstallCodexStopHook(
     (entry) => countInEntry(entry, command, legacyCommands) > 0,
   )) {
     return { changed: false };
+  }
+
+  if (canUseDirectMerge(entries, command, legacyCommands)) {
+    return uninstallJsonHook(projectRoot, codexStopSpec(command));
   }
 
   const next = structuredClone(file.value);

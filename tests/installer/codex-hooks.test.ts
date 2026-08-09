@@ -253,6 +253,17 @@ describe("Codex hooks installation", () => {
     });
   });
 
+  it("keeps Codex's empty hooks container after removing its sole direct hook", async () => {
+    const root = await temporaryProject();
+
+    await installCodexStopHook(root, command);
+    await expect(uninstallCodexStopHook(root, command)).resolves.toEqual({
+      changed: true,
+    });
+
+    await expect(settings(root)).resolves.toEqual({ hooks: {} });
+  });
+
   it("removes exact current and obsolete owned handlers together on uninstall", async () => {
     const root = await temporaryProject();
     const path = join(root, ".codex", "hooks.json");
