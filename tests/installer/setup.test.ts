@@ -42,6 +42,200 @@ afterEach(async () => {
 });
 
 describe("Phase 0 setup lifecycle", () => {
+  it("records an explicitly selected Claude integration with its public path", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      agents: ["claude-code"],
+      ...runtime,
+    });
+
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      {
+        agent: "claude-code",
+        mode: "native",
+        path: ".claude/settings.local.json",
+      },
+    ]);
+  });
+
+  it("defaults an omitted agent selection to Claude for source compatibility", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+
+    await setupProject({
+      projectRoot: root,
+      topic: "private_topic_1234567890",
+      ...runtime,
+    });
+
+    expect((await readProjectConfig(root)).public.integrations).toEqual([
+      {
+        agent: "claude-code",
+        mode: "native",
+        path: ".claude/settings.local.json",
+      },
+    ]);
+  });
+
+  it("rejects an explicitly empty agent selection before writing", async () => {
+    const root = await temporaryProject();
+    const ignorePath = join(root, ".gitignore");
+    await writeFile(ignorePath, "dist/\n", "utf8");
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        topic: "private_topic_1234567890",
+        agents: [],
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow("at least one agent is required");
+
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe("dist/\n");
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects a deferred native adapter before snapshots or writes", async () => {
+    const root = await temporaryProject();
+    const settingsPath = join(root, ".claude", "settings.local.json");
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(settingsPath, "not-json\n", "utf8");
+
+    await expect(
+      setupProject({
+        projectRoot: root,
+        agents: ["codex"],
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+      }),
+    ).rejects.toThrow("native adapter is not available: codex");
+
+    await expect(readFile(settingsPath, "utf8")).resolves.toBe("not-json\n");
+    await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("migrates an existing v1 Claude install without changing stored values", async () => {
+    const root = await temporaryProject();
+    const runtime = {
+      nodePath: "C:/node.exe",
+      cliPath: "C:/noutify/dist/cli.js",
+    };
+    const legacyCommand = buildLegacyClaudeHookCommand(root, runtime);
+    await writeFile(
+      join(root, "noutify.config.json"),
+      `${JSON.stringify({
+        version: 1,
+        project: { name: " Legacy Demo " },
+        provider: { type: "ntfy" },
+        events: { waiting: false },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(root, ".noutify.local.json"),
+      `${JSON.stringify({
+        server: "https://ntfy.example/path/",
+        topic: "private_topic_1234567890",
+        language: "es",
+        setupCompleted: true,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(
+      join(root, ".claude", "settings.local.json"),
+      `${JSON.stringify({
+        permissions: { allow: ["Read"] },
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: "command", command: legacyCommand, timeout: 12 },
+                { type: "command", command: "other-command", timeout: 12 },
+              ],
+            },
+          ],
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await setupProject({ projectRoot: root, ...runtime });
+
+    const publicConfig = JSON.parse(
+      await readFile(join(root, "noutify.config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const privateConfig = JSON.parse(
+      await readFile(join(root, ".noutify.local.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(publicConfig).toMatchObject({
+      version: 2,
+      project: { name: " Legacy Demo " },
+      events: { waiting: false },
+      integrations: [
+        {
+          agent: "claude-code",
+          mode: "native",
+          path: ".claude/settings.local.json",
+        },
+      ],
+    });
+    expect(privateConfig).toMatchObject({
+      server: "https://ntfy.example/path/",
+      topic: "private_topic_1234567890",
+      language: "es",
+      setupCompleted: true,
+      automaticReceipts: {},
+    });
+    expect(
+      JSON.parse(
+        await readFile(join(root, ".claude", "settings.local.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      permissions: { allow: ["Read"] },
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "other-command", timeout: 12 },
+            ],
+          },
+          {
+            hooks: [
+              {
+                type: "command",
+                command: runtime.nodePath,
+                args: [
+                  runtime.cliPath,
+                  "hook",
+                  "claude-stop",
+                  "--project",
+                  root,
+                ],
+                timeout: 12,
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("installs, tests, confirms, diagnoses and uninstalls idempotently", async () => {
     const root = await temporaryProject();
     const runtime = {

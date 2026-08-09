@@ -1,5 +1,5 @@
 import { access, readFile } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import {
   PRIVATE_CONFIG_FILE,
@@ -13,6 +13,11 @@ import {
   normalizeNotificationLanguage,
   type NotificationLanguage,
 } from "../config/language.js";
+import {
+  normalizeIntegrations,
+  type AgentId,
+  type NativeAgentId,
+} from "../config/integrations.js";
 import { notificationCopy } from "../core/notification-catalog.js";
 import type { Notification } from "../core/types.js";
 import {
@@ -23,28 +28,39 @@ import {
 import {
   type ClaudeHookCommand,
   countClaudeStopHooks,
-  installClaudeStopHook,
   uninstallClaudeStopHook,
 } from "./claude-settings.js";
 import {
   hasClaudeSkill,
   installClaudeSkill,
-  preflightClaudeSkill,
   removeEmptyClaudeSkillDirectory,
   uninstallClaudeSkill,
 } from "./claude-skill.js";
+import {
+  nativeAdapter,
+  type AdapterContext,
+  type AgentAdapter,
+  type RuntimePaths,
+} from "./agent-adapter.js";
+import {
+  buildClaudeHookCommand,
+  buildLegacyClaudeHookCommand,
+  createClaudeCodeAdapter,
+} from "./adapters/claude-code.js";
 import {
   restoreFileSnapshots,
   snapshotFiles,
 } from "./file-snapshot.js";
 
-export interface RuntimePaths {
-  nodePath: string;
-  cliPath: string;
-}
+export type { RuntimePaths } from "./agent-adapter.js";
+export {
+  buildClaudeHookCommand,
+  buildLegacyClaudeHookCommand,
+} from "./adapters/claude-code.js";
 
 export interface SetupProjectInput extends RuntimePaths {
   projectRoot: string;
+  agents?: readonly AgentId[];
   projectName?: string;
   server?: string;
   topic?: string;
@@ -85,51 +101,6 @@ export interface DoctorResult {
   checks: DoctorCheck[];
 }
 
-function quoteArgument(value: string): string {
-  return `"${value.replaceAll('"', '\\"')}"`;
-}
-
-export function buildClaudeHookCommand(
-  projectRoot: string,
-  runtime: RuntimePaths,
-): ClaudeHookCommand {
-  validateRuntimePaths(runtime);
-  return {
-    command: runtime.nodePath,
-    args: [
-      runtime.cliPath,
-      "hook",
-      "claude-stop",
-      "--project",
-      resolve(projectRoot),
-    ],
-  };
-}
-
-export function buildLegacyClaudeHookCommand(
-  projectRoot: string,
-  runtime: RuntimePaths,
-): string {
-  validateRuntimePaths(runtime);
-  return [
-    quoteArgument(runtime.nodePath),
-    quoteArgument(runtime.cliPath),
-    "hook",
-    "claude-stop",
-    "--project",
-    quoteArgument(resolve(projectRoot)),
-  ].join(" ");
-}
-
-function validateRuntimePaths(runtime: RuntimePaths): void {
-  if (!isAbsolute(runtime.nodePath)) {
-    throw new Error("runtime nodePath must be absolute");
-  }
-  if (!isAbsolute(runtime.cliPath)) {
-    throw new Error("runtime cliPath must be absolute");
-  }
-}
-
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -144,25 +115,51 @@ export async function setupProject(
   dependencies: SetupDependencies = {},
 ): Promise<SetupProjectResult> {
   const projectRoot = resolve(input.projectRoot);
-  const hookCommand = buildClaudeHookCommand(projectRoot, input);
-  const legacyHookCommand = buildLegacyClaudeHookCommand(projectRoot, input);
-  await preflightClaudeSkill(projectRoot, input);
+  const selectedAgents = input.agents ?? (["claude-code"] as const);
+  if (selectedAgents.length === 0) {
+    throw new Error("at least one agent is required");
+  }
+  const adapters = setupAdapters(selectedAgents, dependencies);
+  const runtime: RuntimePaths = {
+    nodePath: input.nodePath,
+    cliPath: input.cliPath,
+  };
+  const contexts = adapters.map<{
+    adapter: AgentAdapter;
+    context: AdapterContext;
+  }>((adapter) => ({
+    adapter,
+    context: { projectRoot, runtime },
+  }));
+  await Promise.all(
+    contexts.map(({ adapter, context }) => adapter.preflight(context)),
+  );
+
+  const hookCommand = buildClaudeHookCommand(projectRoot, runtime);
+  const legacyHookCommand = buildLegacyClaudeHookCommand(projectRoot, runtime);
+  let hookChanged = false;
+  if (adapters.some((adapter) => adapter.id === "claude-code")) {
+    const [currentHookCount, ownedHookCount] = await Promise.all([
+      countClaudeStopHooks(projectRoot, hookCommand),
+      countClaudeStopHooks(projectRoot, hookCommand, [legacyHookCommand]),
+    ]);
+    hookChanged = currentHookCount !== 1 || ownedHookCount !== currentHookCount;
+  }
+
   const publicExists = await exists(join(projectRoot, PUBLIC_CONFIG_FILE));
   const privateExists = await exists(join(projectRoot, PRIVATE_CONFIG_FILE));
-  const settingsPath = join(projectRoot, ".claude", "settings.local.json");
   const skillDirectory = join(projectRoot, ".claude", "skills", "noutify");
   const skillPath = join(skillDirectory, "SKILL.md");
-  const launcherPath = join(skillDirectory, "launcher.mjs");
   const skillDirectoryExisted = await exists(skillDirectory);
-  const snapshots = await snapshotFiles([
+  const snapshotPaths = new Set([
     join(projectRoot, ".gitignore"),
     join(projectRoot, PUBLIC_CONFIG_FILE),
     join(projectRoot, PRIVATE_CONFIG_FILE),
-    settingsPath,
-    `${settingsPath}.noutify-backup`,
-    skillPath,
-    launcherPath,
+    ...contexts.flatMap(({ adapter, context }) =>
+      adapter.ownedPaths(context).map((path) => join(projectRoot, path)),
+    ),
   ]);
+  const snapshots = await snapshotFiles([...snapshotPaths]);
   let created = false;
   let bundle;
   try {
@@ -172,8 +169,31 @@ export async function setupProject(
           "Noutify configuration is incomplete; both public and private files are required",
         );
       }
+      const storedPublic = JSON.parse(
+        await readFile(join(projectRoot, PUBLIC_CONFIG_FILE), "utf8"),
+      ) as { version?: unknown };
+      const migratingV1 = storedPublic.version === 1;
       bundle = await readProjectConfig(projectRoot);
       await ensurePrivateIgnore(projectRoot);
+      const integrations = new Map(
+        bundle.public.integrations.map((integration) => [
+          integration.agent,
+          integration,
+        ]),
+      );
+      for (const adapter of adapters) {
+        integrations.set(adapter.id, {
+          agent: adapter.id,
+          mode: adapter.mode,
+          path: adapter.publicPath,
+        });
+      }
+      bundle.public.integrations = normalizeIntegrations([
+        ...integrations.values(),
+      ]);
+      await writeProjectConfig(projectRoot, bundle, {
+        preserveValues: migratingV1,
+      });
     } else {
       const initialInput: {
         projectName: string;
@@ -187,20 +207,23 @@ export async function setupProject(
       if (input.topic !== undefined) initialInput.topic = input.topic;
       if (input.language !== undefined) initialInput.language = input.language;
       bundle = createInitialConfig(initialInput);
+      bundle.public.integrations = normalizeIntegrations(
+        adapters.map((adapter) => ({
+          agent: adapter.id,
+          mode: adapter.mode,
+          path: adapter.publicPath,
+        })),
+      );
       await writeProjectConfig(projectRoot, bundle);
       created = true;
     }
 
-    const hook = await installClaudeStopHook(
-      projectRoot,
-      hookCommand,
-      [legacyHookCommand],
-    );
-    const installSkill = dependencies.installSkill ?? installClaudeSkill;
-    await installSkill(projectRoot, input);
+    for (const { adapter, context } of contexts) {
+      await adapter.install(context);
+    }
     return {
       created,
-      hookChanged: hook.changed,
+      hookChanged,
       topic: bundle.private.topic,
       language: bundle.private.language,
       server: bundle.private.server,
@@ -209,11 +232,30 @@ export async function setupProject(
   } catch (error) {
     await restoreFileSnapshots(snapshots);
     const skillSnapshot = snapshots.find((snapshot) => snapshot.path === skillPath);
-    if (skillSnapshot?.contents === null && !skillDirectoryExisted) {
+    if (
+      adapters.some((adapter) => adapter.id === "claude-code") &&
+      skillSnapshot?.contents === null &&
+      !skillDirectoryExisted
+    ) {
       await removeEmptyClaudeSkillDirectory(projectRoot);
     }
     throw error;
   }
+}
+
+function setupAdapters(
+  agents: readonly AgentId[],
+  dependencies: SetupDependencies,
+): AgentAdapter[] {
+  return agents.map((agent) => {
+    if (agent.startsWith("generic:")) {
+      throw new Error(`agent adapter is not available: ${agent}`);
+    }
+    const adapter = nativeAdapter(agent as NativeAgentId);
+    return agent === "claude-code" && dependencies.installSkill !== undefined
+      ? createClaudeCodeAdapter({ installSkill: dependencies.installSkill })
+      : adapter;
+  });
 }
 
 export async function setProjectLanguage(

@@ -298,8 +298,13 @@ async function restoreFile(snapshot: FileSnapshot): Promise<void> {
 export async function writeProjectConfig(
   projectRoot: string,
   bundle: ProjectConfigBundle,
+  options: { preserveValues?: boolean } = {},
 ): Promise<void> {
   const validated = validateProjectConfig(bundle.public, bundle.private);
+  if (options.preserveValues === true) {
+    validated.public.project.name = bundle.public.project.name;
+    validated.private.server = bundle.private.server;
+  }
   await mkdir(projectRoot, { recursive: true });
   const publicPath = join(projectRoot, PUBLIC_CONFIG_FILE);
   const privatePath = join(projectRoot, PRIVATE_CONFIG_FILE);

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 import { readProjectConfig } from "./config/project-config.js";
 import { normalizeNotificationLanguage } from "./config/language.js";
+import { parseAgentId } from "./config/integrations.js";
 import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
 import type { Notification } from "./core/types.js";
@@ -214,9 +215,11 @@ export async function runCli(
         const server = optionValues(parsed, "server")[0];
         const topic = optionValues(parsed, "topic")[0];
         const language = optionValues(parsed, "language")[0];
+        const agents = optionValues(parsed, "agent");
         if (server !== undefined) input.server = server;
         if (topic !== undefined) input.topic = topic;
         if (language !== undefined) input.language = normalizeNotificationLanguage(language);
+        if (agents.length > 0) input.agents = agents.map(parseAgentId);
         const result = await setupProject(input);
         if (optionValues(parsed, "format")[0] === "json") {
           io.writeStdout(JSON.stringify(

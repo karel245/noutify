@@ -69,6 +69,29 @@ describe("runCli", () => {
     expect(output.stderr).toEqual(["duplicate option --project for doctor"]);
   });
 
+  it("forwards explicit repeated agent selections to setup", async () => {
+    const root = await temporaryProject();
+    const output = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--agent",
+          "claude-code",
+          "--agent",
+          "codex",
+        ],
+        output.io,
+        { nodePath: "C:/node.exe", cliPath: "C:/noutify/dist/cli.js" },
+      ),
+    ).toBe(1);
+    expect(output.stderr).toEqual(["native adapter is not available: codex"]);
+    await expect(readProjectConfig(root)).rejects.toBeDefined();
+  });
+
   it("routes the complete Phase 0 command lifecycle", async () => {
     const root = await temporaryProject();
     const topic = "private_topic_1234567890";
