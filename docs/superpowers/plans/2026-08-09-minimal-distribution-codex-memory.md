@@ -143,7 +143,7 @@ git commit -m "feat: add versioned agent integrations"
 - Produces: `WaitingHookPayload { recursive: boolean; valid: boolean }`.
 - Produces: `runWaitingHook(input: string, context: WaitingHookContext): Promise<void>` where context contains `agent`, `projectName`, `language`, `enabled`, `confirmed`, `parse`, and `send`.
 - Produces: `ParsedArguments.options: Map<string, string[]>` and `optionValues(parsed, name): readonly string[]`.
-- Produces internal commands `hook claude-stop`, `hook codex-stop`, and `notify waiting --agent <id>`; every internal command is silent and exits 0 on malformed payload, missing config, or send failure.
+- Keeps `hook claude-stop` active through the shared dispatcher. The repeatable parser reserves the syntax needed by later internal routes, but Task 4 owns `hook codex-stop` behavior and Task 5 owns `notify waiting --agent <id>` behavior; neither future route is activated in this task. Every active internal hook command is silent and exits 0 on malformed payload, missing config, or send failure.
 
 - [ ] **Step 1: Write failing dispatcher and repeated-option tests**
 
@@ -168,7 +168,7 @@ expect(parseArguments(["setup", "--agent", "codex", "--agent", "claude-code"])
   .options.get("agent")).toEqual(["codex", "claude-code"]);
 ```
 
-Also assert no send for disabled, unconfirmed, invalid, or recursive events; malformed internal commands must write neither stdout nor stderr.
+Also assert no send for disabled, unconfirmed, invalid, or recursive events; malformed Claude internal commands must write neither stdout nor stderr.
 
 - [ ] **Step 2: Run the focused tests and verify they fail**
 
@@ -200,7 +200,7 @@ export async function runWaitingHook(input: string, context: WaitingHookContext)
 }
 ```
 
-Change the CLI parser so every option stores all occurrences, reject duplicates for single-value options, preserve occurrence order for `--agent` and `--memory-link`, and keep hook parsing silent. Refactor Claude's parser to return `WaitingHookPayload` and remove its direct notification construction.
+Change the CLI parser so every option stores all occurrences, reject duplicates for single-value options, preserve occurrence order for the future `--agent` and `--memory-link` consumers, and keep active hook parsing silent. Refactor Claude's parser to return `WaitingHookPayload` and remove its direct notification construction. Do not add Codex or generic notification behavior before Tasks 4 and 5.
 
 - [ ] **Step 4: Run focused tests, type checking, and the full suite**
 
