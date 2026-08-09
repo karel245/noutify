@@ -572,6 +572,65 @@ describe("runCli", () => {
     expect(hookIo.stderr).toEqual([]);
   });
 
+  it.each([
+    ["valid", '{"hook_event_name":"AfterAgent","stop_hook_active":false}', false, 1],
+    ["recursive", '{"hook_event_name":"AfterAgent","stop_hook_active":true}', false, 0],
+    ["wrong event", '{"hook_event_name":"BeforeAgent"}', false, 0],
+    ["malformed", "not-json", false, 0],
+    ["send failure", '{"hook_event_name":"AfterAgent"}', true, 1],
+  ])(
+    "returns Gemini's exact empty-object response for a %s hook path",
+    async (_label, input, rejectSend, expectedAttempts) => {
+      const root = await temporaryProject();
+      let sendAttempts = 0;
+      const dependencies = {
+        nodePath: "C:/node.exe",
+        cliPath: "C:/noutify/dist/cli.js",
+        send: async () => {
+          sendAttempts += 1;
+          if (rejectSend) throw new Error("provider unavailable");
+          return { ok: true, attempts: 1 } as const;
+        },
+      };
+      await runCli(
+        [
+          "setup",
+          "--project",
+          root,
+          "--topic",
+          "private_topic_1234567890",
+          "--agent",
+          "gemini-cli",
+        ],
+        memoryIo().io,
+        dependencies,
+      );
+      await runCli(["confirm", "--project", root], memoryIo().io, dependencies);
+      const hookIo = memoryIo(input);
+
+      expect(
+        await runCli(
+          ["hook", "gemini-after-agent", "--project", root],
+          hookIo.io,
+          dependencies,
+        ),
+      ).toBe(0);
+      expect(sendAttempts).toBe(expectedAttempts);
+      expect(hookIo.stdout).toEqual(["{}"]);
+      expect(hookIo.stderr).toEqual([]);
+    },
+  );
+
+  it("does not apply Gemini's output contract to other lifecycle hooks", async () => {
+    const output = memoryIo("not-json");
+
+    expect(
+      await runCli(["hook", "codex-stop", "--project", "C:/missing"], output.io),
+    ).toBe(0);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toEqual([]);
+  });
+
   it("passes stored Spanish language to the silent Stop hook", async () => {
     const root = await temporaryProject();
     const sent: Notification[] = [];

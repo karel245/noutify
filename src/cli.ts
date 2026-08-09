@@ -9,6 +9,7 @@ import { parseAgentId } from "./config/integrations.js";
 import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
 import { parseCodexStopPayload } from "./agents/codex/stop.js";
 import { runWaitingHook } from "./agents/waiting-hook.js";
+import { parseGeminiAfterAgentPayload } from "./agents/gemini-cli/after-agent.js";
 import type { Notification } from "./core/types.js";
 import {
   confirmAgent,
@@ -220,6 +221,33 @@ async function runCodexStopHook(
   return 0;
 }
 
+async function runGeminiAfterAgentHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runWaitingHook(input, {
+      agent: "gemini-cli",
+      projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: parseGeminiAfterAgentPayload,
+      send: (notification) => sender(notification, bundle.private),
+    });
+  } catch {
+    // Gemini hooks must remain non-blocking and always receive valid JSON.
+  } finally {
+    io.writeStdout("{}");
+  }
+  return 0;
+}
+
 async function runGenericWaitingNotification(
   projectRoot: string,
   agentValue: string | undefined,
@@ -382,6 +410,9 @@ export async function runCli(
         }
         if (parsed.subcommand === "codex-stop") {
           return runCodexStopHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "gemini-after-agent") {
+          return runGeminiAfterAgentHook(projectRoot, io, runtime.send);
         }
         return 0;
       case "notify":

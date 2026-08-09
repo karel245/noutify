@@ -557,11 +557,11 @@ describe("Phase 0 setup lifecycle", () => {
     await expect(
       setupProject({
         projectRoot: root,
-        agents: ["gemini-cli"],
+        agents: ["copilot-cli"],
         nodePath: "C:/node.exe",
         cliPath: "C:/noutify/dist/cli.js",
       }),
-    ).rejects.toThrow("native adapter is not available: gemini-cli");
+    ).rejects.toThrow("native adapter is not available: copilot-cli");
 
     await expect(readFile(settingsPath, "utf8")).resolves.toBe("not-json\n");
     await expect(access(join(root, "noutify.config.json"))).rejects.toMatchObject({

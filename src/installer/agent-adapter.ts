@@ -5,6 +5,7 @@ import type {
 } from "../config/integrations.js";
 import { claudeCodeAdapter } from "./adapters/claude-code.js";
 import { codexAdapter } from "./adapters/codex.js";
+import { geminiCliAdapter } from "./adapters/gemini-cli.js";
 
 export interface RuntimePaths {
   nodePath: string;
@@ -43,6 +44,9 @@ export function nativeAdapter(id: NativeAgentId): AgentAdapter {
   }
   if (id === "codex") {
     return codexAdapter;
+  }
+  if (id === "gemini-cli") {
+    return geminiCliAdapter;
   }
   throw new Error(`native adapter is not available: ${id}`);
 }
