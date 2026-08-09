@@ -120,6 +120,48 @@ describe("project configuration", () => {
     await expect(readFile(privatePath, "utf8")).resolves.toBe(privateText);
   });
 
+  it("rejects automatic receipt entries with invalid agent identifiers", () => {
+    expect(() =>
+      validateProjectConfig(
+        {
+          version: 2,
+          project: { name: "Demo" },
+          provider: { type: "ntfy" },
+          events: { waiting: true },
+          integrations: [{ agent: "claude-code", mode: "native" }],
+        },
+        {
+          server: "https://ntfy.example",
+          topic: "private_topic_1234567890",
+          language: "es",
+          setupCompleted: false,
+          automaticReceipts: { "generic:Cursor Settings": true },
+        },
+      ),
+    ).toThrow("invalid agent identifier");
+  });
+
+  it("rejects automatic receipt entries that are not true", () => {
+    expect(() =>
+      validateProjectConfig(
+        {
+          version: 2,
+          project: { name: "Demo" },
+          provider: { type: "ntfy" },
+          events: { waiting: true },
+          integrations: [{ agent: "claude-code", mode: "native" }],
+        },
+        {
+          server: "https://ntfy.example",
+          topic: "private_topic_1234567890",
+          language: "es",
+          setupCompleted: false,
+          automaticReceipts: { codex: false },
+        },
+      ),
+    ).toThrow("private config automaticReceipts values must be true");
+  });
+
   it("uses a friendly topic when none is supplied", () => {
     const bundle = createInitialConfig({ projectName: "Demo" });
 
