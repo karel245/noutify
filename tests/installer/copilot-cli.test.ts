@@ -174,6 +174,21 @@ describe("GitHub Copilot CLI adapter", () => {
     await expect(readFile(path, "utf8")).resolves.toBe(contents);
   });
 
+  it("never writes local settings when the private ignore rule cannot be established", async () => {
+    const root = await temporaryProject();
+    await mkdir(join(root, ".gitignore"));
+
+    await expect(
+      copilotCliAdapter.install({
+        projectRoot: root,
+        runtime: { nodePath: "C:/node.exe", cliPath: "C:/noutify/cli.js" },
+      }),
+    ).rejects.toBeDefined();
+    await expect(access(settingsPath(root))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("rejects a linked local settings path before writing outside the project", async () => {
     const root = await temporaryProject();
     const outside = await temporaryProject();
@@ -223,6 +238,36 @@ describe("GitHub Copilot CLI adapter", () => {
     ).rejects.toThrow("later adapter failed");
     await expect(readFile(path, "utf8")).resolves.toBe(settingsBefore);
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(ignoreBefore);
+  });
+
+  it("rolls newly created settings and gitignore back to absence after a later failure", async () => {
+    const root = await temporaryProject();
+    const runtime = { nodePath: "C:/node.exe", cliPath: "C:/noutify/cli.js" };
+    const failingWindsurf: AgentAdapter = {
+      id: "windsurf",
+      mode: "native",
+      publicPath: ".windsurf/hooks.json",
+      ownedPaths: () => [".windsurf/hooks.json"],
+      preflight: async () => undefined,
+      install: async () => {
+        throw new Error("later adapter failed");
+      },
+      inspect: async () => ({ installed: false, detail: "not installed" }),
+      uninstall: async () => ({ changed: false }),
+    };
+
+    await expect(
+      setupProject(
+        { projectRoot: root, agents: ["copilot-cli", "windsurf"], ...runtime },
+        { adapters: [copilotCliAdapter, failingWindsurf] },
+      ),
+    ).rejects.toThrow("later adapter failed");
+    await expect(access(settingsPath(root))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(access(join(root, ".gitignore"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("uninstalls only the exact-owned hook and keeps local settings ignored", async () => {

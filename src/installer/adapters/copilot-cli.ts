@@ -97,11 +97,11 @@ export const copilotCliAdapter: AgentAdapter = {
     await preflightJsonHook(context.projectRoot, hookSpec(context));
   },
   install: async (context) => {
+    await ensureIgnoreRules(context.projectRoot, [COPILOT_LOCAL_SETTINGS]);
     const mutation = await installJsonHook(
       context.projectRoot,
       hookSpec(context),
     );
-    await ensureIgnoreRules(context.projectRoot, [COPILOT_LOCAL_SETTINGS]);
     return mutation;
   },
   inspect: async (context) => {
