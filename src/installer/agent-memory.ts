@@ -132,7 +132,9 @@ function decodeText(contents: Uint8Array, label: string): string {
   }
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(contents);
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      contents,
+    );
   } catch {
     throw new Error(`${label} must contain valid UTF-8 text`);
   }

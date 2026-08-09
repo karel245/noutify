@@ -125,6 +125,42 @@ describe("generic agent memory", () => {
     ).resolves.toEqual(beforeInstruction);
   });
 
+  it("preserves a leading UTF-8 BOM in unrelated memory through install and uninstall", async () => {
+    const root = await temporaryProject();
+    const path = join(root, "AGENTS.md");
+    const original = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from("# Existing instructions\n", "utf8"),
+    ]);
+    const link = { agent: "generic:cursor" as const, relativePath: "AGENTS.md" };
+    await writeFile(path, original);
+
+    await installMemoryIntegration(root, link, runtime);
+    expect((await readFile(path)).subarray(0, 3)).toEqual(
+      Buffer.from([0xef, 0xbb, 0xbf]),
+    );
+
+    await uninstallMemoryIntegration(root, link, runtime);
+    await expect(readFile(path)).resolves.toEqual(original);
+  });
+
+  it("does not delete an otherwise-owned instruction prefixed with a UTF-8 BOM", async () => {
+    const root = await temporaryProject();
+    const selection = { agent: "generic:cursor" as const };
+    const path = join(root, ".noutify", "instructions", "cursor.md");
+    await installMemoryIntegration(root, selection, runtime);
+    const modified = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      await readFile(path),
+    ]);
+    await writeFile(path, modified);
+
+    await expect(
+      uninstallMemoryIntegration(root, selection, runtime),
+    ).resolves.toEqual({ changed: false });
+    await expect(readFile(path)).resolves.toEqual(modified);
+  });
+
   it.each(["parent", "target"])(
     "rejects a symbolic link in the existing %s path segment before writing",
     async (segment) => {
