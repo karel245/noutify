@@ -46,7 +46,7 @@
 - Modify `.gitignore`: ignore generated `release/`.
 - Rewrite `SETUP.md`, `README.md`, and `docs/setup-troubleshooting.md`: agent-neutral minimal flow and truthful compatibility language.
 - Modify `NOUTIFY_CONTEXT.md`: current architecture and release workflow.
-- Add focused tests under `tests/config/`, `tests/agents/`, `tests/installer/`, `tests/scripts/`, and `tests/docs/`.
+- Add focused behavioral tests under `tests/config/`, `tests/agents/`, `tests/installer/`, and `tests/scripts/`; human-facing prose is reviewed manually against executable command evidence.
 
 ---
 
@@ -616,38 +616,28 @@ git commit -m "feat: package minimal Noutify distribution"
 - Rewrite: `README.md`
 - Modify: `docs/setup-troubleshooting.md`
 - Modify: `NOUTIFY_CONTEXT.md`
-- Modify: `tests/docs/agent-installation.test.ts`
-- Create: `tests/docs/compatibility.test.ts`
+- Delete: `tests/docs/agent-installation.test.ts`
 
 **Interfaces:**
 - Consumes: `node Noutify/install.mjs --language <en|es> --agent <id>...` and the CLI commands from Tasks 2, 5, and 6.
 - Produces: a one-prompt installation contract usable by any capable coding agent.
 - Produces: compatibility states `native verified`, `native unverified`, `memory best effort`, and `unsupported or untested`.
 
-- [ ] **Step 1: Write failing documentation contract tests**
+- [ ] **Step 1: Remove prose change-detector tests and preserve executable coverage**
 
-```ts
-expect(setup).toContain("Which agents will use Noutify in this project?");
-expect(setup).toContain("--agent codex");
-expect(setup).toContain("confirm-agent codex");
-expect(setup).toContain("/hooks");
-expect(readme).toContain("native verified");
-expect(readme).toContain("memory best effort");
-expect(readme).not.toContain("runs npm ci");
-expect(setup).not.toContain(".noutify.local.json`");
-```
+Delete `tests/docs/agent-installation.test.ts`; do not replace it with tests that search Markdown source. Confirm the product behavior that the old prose assertions tried to protect is already exercised by the installer, CLI, privacy, manifest, and nested-install tests from Tasks 2, 5, 6, and 7.
 
-Also assert the primary prompt is exactly `Install Noutify following Noutify/SETUP.md.`, current language precedence is preserved, automatic receipt is not conflated with manual test receipt, and Gemini/Copilot/Windsurf are labeled planned or unsupported until plan 2 installs their native adapters.
+- [ ] **Step 2: Run the executable setup contract before changing prose**
 
-- [ ] **Step 2: Run documentation tests and verify outdated content fails**
+Run: `npm test -- tests/scripts/distribution-install.test.mjs tests/scripts/package.test.mjs tests/cli.test.ts tests/installer/setup.test.ts`
 
-Run: `npm test -- tests/docs/agent-installation.test.ts tests/docs/compatibility.test.ts`
-
-Expected: FAIL because the docs still describe source installation and Claude-only Phase 0.
+Expected: PASS; installation, privacy, confirmation gates, and generated-artifact behavior remain covered without asserting Markdown text.
 
 - [ ] **Step 3: Rewrite setup, public docs, troubleshooting, and context**
 
 Document this exact happy path: infer language; detect and propose current platform; ask for one or multiple agents; run the minimal installer; show a newly created topic exactly once; pause for subscription; run manual test; wait for explicit receipt; run `confirm`; run `doctor`; trust Codex through `/hooks`; end a real agent turn; wait for explicit automatic receipt; run `confirm-agent codex`; rerun `doctor`. For generic agents, require an explicit memory file or report pending and best effort. State that the folder must remain in place.
+
+Manually review the finished prose against this checklist: the primary prompt is exactly `Install Noutify following Noutify/SETUP.md.`; language precedence is preserved; manual and automatic receipts remain distinct; every literal command exists in CLI help or the distribution installer; local Markdown links resolve; external links use the official sources in the design spec; Gemini/Copilot/Windsurf are planned or unsupported until plan 2 installs them.
 
 - [ ] **Step 4: Run all verification from a clean generated artifact**
 
@@ -658,7 +648,7 @@ Expected: tests/typecheck/build/package PASS; only intentional source and plan c
 - [ ] **Step 5: Commit documentation and final plan-1 verification**
 
 ```powershell
-git add SETUP.md README.md docs/setup-troubleshooting.md NOUTIFY_CONTEXT.md tests/docs/agent-installation.test.ts tests/docs/compatibility.test.ts
+git add SETUP.md README.md docs/setup-troubleshooting.md NOUTIFY_CONTEXT.md tests/docs/agent-installation.test.ts
 git commit -m "docs: publish multi-agent minimal setup"
 ```
 

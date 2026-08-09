@@ -389,38 +389,25 @@ git commit -m "test: verify all native agent adapters"
 - Modify: `README.md`
 - Modify: `docs/setup-troubleshooting.md`
 - Modify: `NOUTIFY_CONTEXT.md`
-- Modify: `tests/docs/agent-installation.test.ts`
-- Modify: `tests/docs/compatibility.test.ts`
 
 **Interfaces:**
 - Consumes: canonical agent IDs and commands implemented in Tasks 2–5.
 - Produces: exact install examples for Gemini CLI, local Copilot CLI, Windsurf, and multiple agents.
 - Produces: separate acceptance instructions and compatibility state for each native platform.
 
-- [ ] **Step 1: Write failing public-contract tests for all platforms**
+- [ ] **Step 1: Verify every documented command through executable behavior**
 
-```ts
-for (const id of ["gemini-cli", "copilot-cli", "windsurf"]) {
-  expect(setup).toContain(`--agent ${id}`);
-  expect(setup).toContain(`confirm-agent ${id}`);
-}
-expect(readme).toContain("local GitHub Copilot CLI");
-expect(readme).not.toContain("Copilot cloud: native verified");
-expect(readme).toContain("Gemini CLI | native unverified");
-expect(readme).toContain("Windsurf Cascade | native unverified");
-```
+Run: `npm test -- tests/scripts/distribution-install.test.mjs tests/installer/setup.test.ts tests/cli.test.ts`
 
-Assert settings paths and events match the implementation, Gemini/Copilot empty-object behavior is documented only in troubleshooting, and the primary setup prompt stays one line and platform-neutral.
+Expected: PASS for single-agent and combined installation, `confirm-agent`, doctor, lifecycle output, rollback, and uninstall across Gemini CLI, local Copilot CLI, and Windsurf.
 
-- [ ] **Step 2: Run documentation tests and verify missing platform guidance**
-
-Run: `npm test -- tests/docs/agent-installation.test.ts tests/docs/compatibility.test.ts`
-
-Expected: FAIL until the three platforms and local-only Copilot boundary are documented.
-
-- [ ] **Step 3: Update the agent contract, compatibility matrix, and troubleshooting**
+- [ ] **Step 2: Update the agent contract, compatibility matrix, and troubleshooting**
 
 Document detection/default selection, repeatable `--agent`, per-platform settings/event, local-only Copilot limitation, trust/reload steps drawn from the official platform docs, real-turn acceptance, explicit phone receipt, `confirm-agent`, and doctor rerun. Keep Cursor, OpenCode, and Cline on `memory best effort` or `unsupported or untested`; never claim universal automatic support.
+
+- [ ] **Step 3: Review prose against the implemented surfaces**
+
+Manually verify that every command exists in CLI help, every local Markdown link resolves, each settings path and event matches its adapter, Gemini/Copilot empty-object behavior appears only in troubleshooting, the primary prompt remains one line and platform-neutral, Copilot cloud is never described as native, and every compatibility state matches the real-device acceptance ledger.
 
 - [ ] **Step 4: Run final automated verification and inspect the generated artifact**
 
@@ -431,7 +418,7 @@ Expected: PASS; the generated `release/Noutify/SETUP.md` contains all native IDs
 - [ ] **Step 5: Commit documentation and final plan-2 verification**
 
 ```powershell
-git add SETUP.md README.md docs/setup-troubleshooting.md NOUTIFY_CONTEXT.md tests/docs/agent-installation.test.ts tests/docs/compatibility.test.ts
+git add SETUP.md README.md docs/setup-troubleshooting.md NOUTIFY_CONTEXT.md
 git commit -m "docs: add native agent compatibility guidance"
 ```
 
