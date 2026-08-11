@@ -1,9 +1,15 @@
+import type { NotificationLanguage } from "../config/language.js";
+import { notificationCopy } from "./notification-catalog.js";
 import type { Notification } from "./types.js";
 
-export function createWaitingNotification(projectName: string): Notification {
+export function createWaitingNotification(
+  projectName: string,
+  language: NotificationLanguage,
+): Notification {
+  const copy = notificationCopy(language);
   return {
-    title: "Agent waiting",
-    message: `${projectName}: The agent finished its response and is waiting for the next prompt.`,
+    title: copy.waitingTitle,
+    message: copy.waitingMessage(projectName),
     tags: ["speech_balloon", "hourglass"],
     priority: "default",
   };

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
@@ -6,22 +6,45 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import {
+  validateStoredLanguage,
+  type NotificationLanguage,
+} from "./language.js";
+import {
+  normalizeIntegrations,
+  parseAgentId,
+  type AgentId,
+  type IntegrationConfig,
+} from "./integrations.js";
+import { generateFriendlyTopic } from "./topic.js";
+import {
+  assertSafeProjectPath,
+  assertSafeProjectPaths,
+} from "../core/project-path.js";
+import {
+  restoreFileSnapshots,
+  snapshotFiles,
+} from "../installer/file-snapshot.js";
 
 export const PUBLIC_CONFIG_FILE = "noutify.config.json";
 export const PRIVATE_CONFIG_FILE = ".noutify.local.json";
 
 export interface PublicProjectConfig {
-  version: 1;
+  version: 2;
   project: { name: string };
   provider: { type: "ntfy" };
   events: { waiting: boolean };
+  integrations: IntegrationConfig[];
 }
 
 export interface PrivateProjectConfig {
   server: string;
   topic: string;
+  language: NotificationLanguage;
   setupCompleted: boolean;
+  automaticReceipts: Partial<Record<AgentId, true>>;
 }
 
 export interface ProjectConfigBundle {
@@ -33,6 +56,7 @@ export interface InitialConfigInput {
   projectName: string;
   server?: string;
   topic?: string;
+  language?: NotificationLanguage;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,59 +109,138 @@ function validateTopic(value: unknown): string {
   return value;
 }
 
+function validatePublicFields(
+  value: Record<string, unknown>,
+  preserveValues = false,
+): {
+  project: { name: string };
+  provider: { type: "ntfy" };
+  events: { waiting: boolean };
+} {
+  if (!isRecord(value.project)) {
+    throw new Error("public config project is required");
+  }
+  assertOnlyKeys(value.project, ["name"], "public config project");
+  if (
+    !isRecord(value.provider) ||
+    value.provider.type !== "ntfy"
+  ) {
+    throw new Error("public config provider must be ntfy");
+  }
+  assertOnlyKeys(value.provider, ["type"], "public config provider");
+  if (
+    !isRecord(value.events) ||
+    typeof value.events.waiting !== "boolean"
+  ) {
+    throw new Error("public config events.waiting must be boolean");
+  }
+  assertOnlyKeys(value.events, ["waiting"], "public config events");
+  const projectName = validateProjectName(value.project.name);
+  return {
+    project: {
+      name: preserveValues
+        ? value.project.name as string
+        : projectName,
+    },
+    provider: { type: "ntfy" },
+    events: { waiting: value.events.waiting },
+  };
+}
+
+function validatePrivateFields(
+  value: Record<string, unknown>,
+  preserveValues = false,
+): Omit<
+  PrivateProjectConfig,
+  "automaticReceipts"
+> {
+  if (typeof value.setupCompleted !== "boolean") {
+    throw new Error("private config setupCompleted must be boolean");
+  }
+  const server = validateServer(value.server);
+  return {
+    server: preserveValues ? value.server as string : server,
+    topic: validateTopic(value.topic),
+    language: validateStoredLanguage(value.language),
+    setupCompleted: value.setupCompleted,
+  };
+}
+
+function validateAutomaticReceipts(
+  value: unknown,
+): Partial<Record<AgentId, true>> {
+  if (!isRecord(value)) {
+    throw new Error("private config automaticReceipts must be an object");
+  }
+  const receipts: Partial<Record<AgentId, true>> = {};
+  for (const [agent, enabled] of Object.entries(value)) {
+    const agentId = parseAgentId(agent);
+    if (enabled !== true) {
+      throw new Error("private config automaticReceipts values must be true");
+    }
+    receipts[agentId] = true;
+  }
+  return receipts;
+}
+
 export function validateProjectConfig(
   publicValue: unknown,
   privateValue: unknown,
 ): ProjectConfigBundle {
-  if (!isRecord(publicValue) || publicValue.version !== 1) {
-    throw new Error("public config version must be 1");
+  if (!isRecord(publicValue) || (publicValue.version !== 1 && publicValue.version !== 2)) {
+    throw new Error("public config version must be 1 or 2");
   }
-  assertOnlyKeys(
-    publicValue,
-    ["version", "project", "provider", "events"],
-    "public config",
-  );
-  if (!isRecord(publicValue.project)) {
-    throw new Error("public config project is required");
-  }
-  assertOnlyKeys(publicValue.project, ["name"], "public config project");
-  if (
-    !isRecord(publicValue.provider) ||
-    publicValue.provider.type !== "ntfy"
-  ) {
-    throw new Error("public config provider must be ntfy");
-  }
-  assertOnlyKeys(publicValue.provider, ["type"], "public config provider");
-  if (
-    !isRecord(publicValue.events) ||
-    typeof publicValue.events.waiting !== "boolean"
-  ) {
-    throw new Error("public config events.waiting must be boolean");
-  }
-  assertOnlyKeys(publicValue.events, ["waiting"], "public config events");
   if (!isRecord(privateValue)) {
     throw new Error("private config is required");
   }
+
+  if (publicValue.version === 1) {
+    assertOnlyKeys(
+      publicValue,
+      ["version", "project", "provider", "events"],
+      "public config",
+    );
+    assertOnlyKeys(
+      privateValue,
+      ["server", "topic", "language", "setupCompleted"],
+      "private config",
+    );
+    return {
+      public: {
+        version: 2,
+        ...validatePublicFields(publicValue, true),
+        integrations: [{ agent: "claude-code", mode: "native" }],
+      },
+      private: {
+        ...validatePrivateFields(privateValue, true),
+        automaticReceipts: {},
+      },
+    };
+  }
+
+  assertOnlyKeys(
+    publicValue,
+    ["version", "project", "provider", "events", "integrations"],
+    "public config",
+  );
+  if (!Array.isArray(publicValue.integrations)) {
+    throw new Error("public config integrations must be an array");
+  }
   assertOnlyKeys(
     privateValue,
-    ["server", "topic", "setupCompleted"],
+    ["server", "topic", "language", "setupCompleted", "automaticReceipts"],
     "private config",
   );
-  if (typeof privateValue.setupCompleted !== "boolean") {
-    throw new Error("private config setupCompleted must be boolean");
-  }
 
   return {
     public: {
-      version: 1,
-      project: { name: validateProjectName(publicValue.project.name) },
-      provider: { type: "ntfy" },
-      events: { waiting: publicValue.events.waiting },
+      version: 2,
+      ...validatePublicFields(publicValue),
+      integrations: normalizeIntegrations(publicValue.integrations as IntegrationConfig[]),
     },
     private: {
-      server: validateServer(privateValue.server),
-      topic: validateTopic(privateValue.topic),
-      setupCompleted: privateValue.setupCompleted,
+      ...validatePrivateFields(privateValue),
+      automaticReceipts: validateAutomaticReceipts(privateValue.automaticReceipts),
     },
   };
 }
@@ -145,78 +248,83 @@ export function validateProjectConfig(
 export function createInitialConfig(
   input: InitialConfigInput,
 ): ProjectConfigBundle {
-  const topic = input.topic ?? randomBytes(18).toString("base64url");
+  const topic = input.topic ?? generateFriendlyTopic();
   return validateProjectConfig(
     {
-      version: 1,
+      version: 2,
       project: { name: input.projectName },
       provider: { type: "ntfy" },
       events: { waiting: true },
+      integrations: [{ agent: "claude-code", mode: "native" }],
     },
     {
       server: input.server ?? "https://ntfy.sh",
       topic,
+      language: input.language ?? "en",
       setupCompleted: false,
+      automaticReceipts: {},
     },
   );
 }
 
-async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+async function writeTextAtomic(
+  projectRoot: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  await assertSafeProjectPath(projectRoot, path);
+  await mkdir(dirname(path), { recursive: true });
+  await assertSafeProjectPath(projectRoot, path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await writeFile(temporaryPath, contents, "utf8");
+    await assertSafeProjectPath(projectRoot, temporaryPath);
+    await assertSafeProjectPath(projectRoot, path);
     await rename(temporaryPath, path);
   } finally {
+    await assertSafeProjectPath(projectRoot, temporaryPath);
     await unlink(temporaryPath).catch(() => undefined);
   }
 }
 
-interface FileSnapshot {
-  path: string;
-  contents: string | null;
-}
-
-async function snapshotFile(path: string): Promise<FileSnapshot> {
-  try {
-    return { path, contents: await readFile(path, "utf8") };
-  } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") {
-      return { path, contents: null };
-    }
-    throw error;
-  }
-}
-
-async function restoreFile(snapshot: FileSnapshot): Promise<void> {
-  if (snapshot.contents === null) {
-    await unlink(snapshot.path).catch((error: unknown) => {
-      if (!isRecord(error) || error.code !== "ENOENT") throw error;
-    });
-    return;
-  }
-  await writeFile(snapshot.path, snapshot.contents, "utf8");
+async function writeJsonAtomic(
+  projectRoot: string,
+  path: string,
+  value: unknown,
+): Promise<void> {
+  await writeTextAtomic(
+    projectRoot,
+    path,
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
 }
 
 export async function writeProjectConfig(
   projectRoot: string,
   bundle: ProjectConfigBundle,
+  options: { preserveValues?: boolean } = {},
 ): Promise<void> {
   const validated = validateProjectConfig(bundle.public, bundle.private);
+  if (options.preserveValues === true) {
+    validated.public.project.name = bundle.public.project.name;
+    validated.private.server = bundle.private.server;
+  }
   await mkdir(projectRoot, { recursive: true });
   const publicPath = join(projectRoot, PUBLIC_CONFIG_FILE);
   const privatePath = join(projectRoot, PRIVATE_CONFIG_FILE);
   const ignorePath = join(projectRoot, ".gitignore");
-  const snapshots = await Promise.all(
-    [ignorePath, publicPath, privatePath].map(snapshotFile),
-  );
+  const paths = [ignorePath, publicPath, privatePath];
+  await assertSafeProjectPaths(projectRoot, paths);
+  const snapshots = await snapshotFiles(projectRoot, paths);
 
   try {
     // Protect the private path before it can ever appear on disk.
     await ensurePrivateIgnore(projectRoot);
-    await writeJsonAtomic(publicPath, validated.public);
-    await writeJsonAtomic(privatePath, validated.private);
+    await writeJsonAtomic(projectRoot, publicPath, validated.public);
+    await writeJsonAtomic(projectRoot, privatePath, validated.private);
   } catch (error) {
-    await Promise.all(snapshots.map(restoreFile));
+    await restoreFileSnapshots(projectRoot, snapshots);
     throw error;
   }
 }
@@ -224,6 +332,10 @@ export async function writeProjectConfig(
 export async function readProjectConfig(
   projectRoot: string,
 ): Promise<ProjectConfigBundle> {
+  await assertSafeProjectPaths(projectRoot, [
+    join(projectRoot, PUBLIC_CONFIG_FILE),
+    join(projectRoot, PRIVATE_CONFIG_FILE),
+  ]);
   const [publicText, privateText] = await Promise.all([
     readFile(join(projectRoot, PUBLIC_CONFIG_FILE), "utf8"),
     readFile(join(projectRoot, PRIVATE_CONFIG_FILE), "utf8"),
@@ -232,28 +344,56 @@ export async function readProjectConfig(
 }
 
 export async function ensurePrivateIgnore(projectRoot: string): Promise<void> {
-  const ignorePath = join(projectRoot, ".gitignore");
-  const existing = await readFile(ignorePath, "utf8").catch(
-    (error: unknown) => {
-      if (
-        isRecord(error) &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
-        return "";
-      }
-      throw error;
-    },
-  );
-  const lines = existing.split(/\r?\n/);
-  if (lines.includes(PRIVATE_CONFIG_FILE)) {
-    return;
+  await ensureIgnoreRules(projectRoot, [PRIVATE_CONFIG_FILE]);
+}
+
+function validateIgnoreRule(rule: string): void {
+  if (!rule || /[\r\n]/.test(rule)) {
+    throw new Error("gitignore rule must be one non-empty line");
   }
+}
+
+async function readIgnoreText(projectRoot: string): Promise<string> {
+  const ignorePath = join(projectRoot, ".gitignore");
+  await assertSafeProjectPath(projectRoot, ignorePath);
+  return readFile(ignorePath, "utf8").catch((error: unknown) => {
+    if (isRecord(error) && "code" in error && error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+}
+
+export async function hasIgnoreRule(
+  projectRoot: string,
+  rule: string,
+): Promise<boolean> {
+  validateIgnoreRule(rule);
+  const existing = await readIgnoreText(projectRoot);
+  return existing.split(/\r?\n/).includes(rule);
+}
+
+export async function ensureIgnoreRules(
+  projectRoot: string,
+  rules: readonly string[],
+): Promise<void> {
+  const ignorePath = join(projectRoot, ".gitignore");
+  const existing = await readIgnoreText(projectRoot);
+  const lines = new Set(existing.split(/\r?\n/));
+  const missing: string[] = [];
+  for (const rule of rules) {
+    validateIgnoreRule(rule);
+    if (!lines.has(rule)) {
+      lines.add(rule);
+      missing.push(rule);
+    }
+  }
+  if (missing.length === 0) return;
 
   const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-  await writeFile(
+  await writeTextAtomic(
+    projectRoot,
     ignorePath,
-    `${existing}${prefix}${PRIVATE_CONFIG_FILE}\n`,
-    "utf8",
+    `${existing}${prefix}${missing.join("\n")}\n`,
   );
 }

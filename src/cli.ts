@@ -3,17 +3,37 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-import { readProjectConfig } from "./config/project-config.js";
-import { handleClaudeStop } from "./agents/claude-code/stop.js";
+import {
+  readProjectConfig,
+  type ProjectConfigBundle,
+} from "./config/project-config.js";
+import { normalizeNotificationLanguage } from "./config/language.js";
+import {
+  parseAgentId,
+  type NativeAgentId,
+} from "./config/integrations.js";
+import { parseClaudeStopPayload } from "./agents/claude-code/stop.js";
+import { parseCodexStopPayload } from "./agents/codex/stop.js";
+import { parseCopilotAgentStopPayload } from "./agents/copilot-cli/agent-stop.js";
+import {
+  runWaitingHook,
+  type WaitingHookPayload,
+} from "./agents/waiting-hook.js";
+import { parseGeminiAfterAgentPayload } from "./agents/gemini-cli/after-agent.js";
+import { parseWindsurfPostResponsePayload } from "./agents/windsurf/post-cascade-response.js";
 import type { Notification } from "./core/types.js";
 import {
+  confirmAgent,
   confirmProject,
   doctorProject,
+  setProjectLanguage,
   setupProject,
   testProject,
   uninstallProject,
   type NotificationSender,
 } from "./installer/setup.js";
+import { parseMemoryLink } from "./installer/agent-memory.js";
+import { AVAILABLE_NATIVE_ADAPTERS } from "./installer/agent-adapter.js";
 import { sendNtfy, type SendResult } from "./providers/ntfy.js";
 
 export interface CliIo {
@@ -30,11 +50,13 @@ export interface CliDependencies {
 
 const HELP = `Noutify Phase 0
 
-Commands: setup | test | confirm | doctor | uninstall
+Commands: setup | test | confirm | confirm-agent | doctor | uninstall | language
 
-  noutify setup [--project PATH] [--server URL] [--topic TOPIC]
+  noutify setup [--project PATH] [--server URL] [--topic TOPIC] [--language LANGUAGE] [--format json]
+  noutify language <language> [--project PATH]
   noutify test [--project PATH]
   noutify confirm [--project PATH]
+  noutify confirm-agent <agent> [--project PATH]
   noutify doctor [--project PATH]
   noutify uninstall [--project PATH]
 `;
@@ -53,47 +75,70 @@ const defaultIo: CliIo = {
   writeStderr: (text) => process.stderr.write(`${text}\n`),
 };
 
-interface ParsedArguments {
+export interface ParsedArguments {
   command: string;
   subcommand?: string;
-  options: Map<string, string>;
+  operands: string[];
+  options: Map<string, string[]>;
 }
 
-function parseArguments(argv: string[]): ParsedArguments {
-  const [command = "--help", possibleSubcommand, ...rest] = argv;
+export function parseArguments(argv: string[]): ParsedArguments {
+  const [command = "--help", ...tokens] = argv;
   let subcommand: string | undefined;
-  let optionTokens: string[];
+  let argumentTokens = tokens;
 
-  if (command === "hook" && possibleSubcommand && !possibleSubcommand.startsWith("--")) {
-    subcommand = possibleSubcommand;
-    optionTokens = rest;
-  } else {
-    optionTokens = possibleSubcommand === undefined ? rest : [possibleSubcommand, ...rest];
+  if (
+    (command === "hook" || command === "notify") &&
+    tokens[0] &&
+    !tokens[0].startsWith("--")
+  ) {
+    subcommand = tokens[0];
+    argumentTokens = tokens.slice(1);
   }
 
-  const options = new Map<string, string>();
-  for (let index = 0; index < optionTokens.length; index += 2) {
-    const key = optionTokens[index];
-    const value = optionTokens[index + 1];
-    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`invalid option near ${key ?? "end of command"}`);
+  const options = new Map<string, string[]>();
+  const operands: string[] = [];
+  for (let index = 0; index < argumentTokens.length; index += 1) {
+    const token = argumentTokens[index];
+    if (token === undefined) break;
+    if (!token.startsWith("--")) {
+      operands.push(token);
+      continue;
     }
-    options.set(key.slice(2), value);
+    const value = argumentTokens[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`invalid option near ${token}`);
+    }
+    const name = token.slice(2);
+    const occurrences = options.get(name) ?? [];
+    occurrences.push(value);
+    options.set(name, occurrences);
+    index += 1;
   }
 
-  const parsed: ParsedArguments = { command, options };
+  const parsed: ParsedArguments = { command, operands, options };
   if (subcommand !== undefined) parsed.subcommand = subcommand;
   return parsed;
 }
 
+export function optionValues(
+  parsed: ParsedArguments,
+  name: string,
+): readonly string[] {
+  return parsed.options.get(name) ?? [];
+}
+
 function validateOptions(parsed: ParsedArguments): void {
   const allowedByCommand: Record<string, readonly string[]> = {
-    setup: ["project", "server", "topic"],
+    setup: ["project", "server", "topic", "language", "format", "agent", "memory-link"],
+    language: ["project"],
     test: ["project"],
     confirm: ["project"],
+    "confirm-agent": ["project"],
     doctor: ["project"],
     uninstall: ["project"],
     hook: ["project"],
+    notify: ["agent", "project"],
     help: [],
     "--help": [],
     "-h": [],
@@ -105,6 +150,29 @@ function validateOptions(parsed: ParsedArguments): void {
   if (unexpected !== undefined) {
     throw new Error(`unknown option --${unexpected} for ${parsed.command}`);
   }
+  const repeatableOptions = new Set(
+    parsed.command === "setup" ? ["agent", "memory-link"] : [],
+  );
+  const duplicate = [...parsed.options.entries()].find(
+    ([option, values]) => !repeatableOptions.has(option) && values.length > 1,
+  );
+  if (duplicate !== undefined) {
+    throw new Error(`duplicate option --${duplicate[0]} for ${parsed.command}`);
+  }
+  if (parsed.command === "setup" && optionValues(parsed, "format")[0] !== undefined && optionValues(parsed, "format")[0] !== "json") {
+    throw new Error("setup format must be json");
+  }
+  if (parsed.command === "language" || parsed.command === "confirm-agent") {
+    if (parsed.operands.length !== 1) {
+      throw new Error(
+        parsed.command === "language"
+          ? "language requires exactly one language"
+          : "confirm-agent requires exactly one agent",
+      );
+    }
+  } else if (parsed.operands.length > 0) {
+    throw new Error(`unexpected operand ${parsed.operands[0]} for ${parsed.command}`);
+  }
 }
 
 function phaseZeroDependencies(dependencies: CliDependencies) {
@@ -113,6 +181,34 @@ function phaseZeroDependencies(dependencies: CliDependencies) {
     cliPath: dependencies.cliPath ?? fileURLToPath(import.meta.url),
     send: dependencies.send ?? sendNtfy,
   };
+}
+
+async function runSelectedNativeWaitingHook(
+  input: string,
+  bundle: ProjectConfigBundle,
+  agent: NativeAgentId,
+  parse: (value: string) => WaitingHookPayload,
+  sender: NotificationSender,
+): Promise<void> {
+  const adapter = AVAILABLE_NATIVE_ADAPTERS.get(agent);
+  if (adapter === undefined || adapter.id !== agent || adapter.mode !== "native") {
+    return;
+  }
+  const selected = bundle.public.integrations.some(
+    (integration) =>
+      integration.agent === adapter.id && integration.mode === adapter.mode,
+  );
+  if (!selected) return;
+
+  await runWaitingHook(input, {
+    agent: adapter.id,
+    projectName: bundle.public.project.name,
+    language: bundle.private.language,
+    enabled: bundle.public.events.waiting,
+    confirmed: bundle.private.setupCompleted,
+    parse,
+    send: (notification) => sender(notification, bundle.private),
+  });
 }
 
 async function runClaudeStopHook(
@@ -125,15 +221,141 @@ async function runClaudeStopHook(
       io.readStdin(),
       readProjectConfig(projectRoot),
     ]);
-    if (!bundle.private.setupCompleted || !bundle.public.events.waiting) {
-      return 0;
-    }
-    await handleClaudeStop(input, {
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "claude-code",
+      parseClaudeStopPayload,
+      sender,
+    );
+  } catch {
+    // Internal hooks must be silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
+async function runCodexStopHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "codex",
+      parseCodexStopPayload,
+      sender,
+    );
+  } catch {
+    // Internal hooks must be silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
+async function runGeminiAfterAgentHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "gemini-cli",
+      parseGeminiAfterAgentPayload,
+      sender,
+    );
+  } catch {
+    // Gemini hooks must remain non-blocking and always receive valid JSON.
+  } finally {
+    io.writeStdout("{}");
+  }
+  return 0;
+}
+
+async function runCopilotAgentStopHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "copilot-cli",
+      parseCopilotAgentStopPayload,
+      sender,
+    );
+  } catch {
+    // Copilot hooks must remain silent and non-blocking under every failure mode.
+  } finally {
+    io.writeStdout("{}");
+  }
+  return 0;
+}
+
+async function runWindsurfPostResponseHook(
+  projectRoot: string,
+  io: CliIo,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    const [input, bundle] = await Promise.all([
+      io.readStdin(),
+      readProjectConfig(projectRoot),
+    ]);
+    await runSelectedNativeWaitingHook(
+      input,
+      bundle,
+      "windsurf",
+      parseWindsurfPostResponsePayload,
+      sender,
+    );
+  } catch {
+    // Windsurf hooks must remain silent and non-blocking under every failure mode.
+  }
+  return 0;
+}
+
+async function runGenericWaitingNotification(
+  projectRoot: string,
+  agentValue: string | undefined,
+  sender: NotificationSender,
+): Promise<number> {
+  try {
+    if (agentValue === undefined) return 0;
+    const agent = parseAgentId(agentValue);
+    if (!agent.startsWith("generic:")) return 0;
+    const bundle = await readProjectConfig(projectRoot);
+    const selected = bundle.public.integrations.some(
+      (integration) =>
+        integration.agent === agent && integration.mode === "memory",
+    );
+    if (!selected) return 0;
+    await runWaitingHook("", {
+      agent,
       projectName: bundle.public.project.name,
+      language: bundle.private.language,
+      enabled: bundle.public.events.waiting,
+      confirmed: bundle.private.setupCompleted,
+      parse: () => ({ valid: true, recursive: false }),
       send: (notification) => sender(notification, bundle.private),
     });
   } catch {
-    // Internal hooks must be silent and non-blocking under every failure mode.
+    // Internal notifications must be silent and non-blocking under every failure mode.
   }
   return 0;
 }
@@ -148,7 +370,11 @@ export async function runCli(
     parsed = parseArguments(argv);
     validateOptions(parsed);
   } catch (error) {
-    if (argv[0] === "hook") {
+    if (argv[0] === "hook" && argv[1] === "copilot-agent-stop") {
+      io.writeStdout("{}");
+      return 0;
+    }
+    if (argv[0] === "hook" || argv[0] === "notify") {
       return 0;
     }
     io.writeStderr(error instanceof Error ? error.message : "invalid arguments");
@@ -156,7 +382,7 @@ export async function runCli(
   }
 
   const runtime = phaseZeroDependencies(dependencies);
-  const projectRoot = resolve(parsed.options.get("project") ?? process.cwd());
+  const projectRoot = resolve(optionValues(parsed, "project")[0] ?? process.cwd());
 
   try {
     switch (parsed.command) {
@@ -171,17 +397,55 @@ export async function runCli(
           nodePath: runtime.nodePath,
           cliPath: runtime.cliPath,
         };
-        const server = parsed.options.get("server");
-        const topic = parsed.options.get("topic");
+        const server = optionValues(parsed, "server")[0];
+        const topic = optionValues(parsed, "topic")[0];
+        const language = optionValues(parsed, "language")[0];
+        const agents = optionValues(parsed, "agent");
+        const memoryLinks = optionValues(parsed, "memory-link");
         if (server !== undefined) input.server = server;
         if (topic !== undefined) input.topic = topic;
+        if (language !== undefined) input.language = normalizeNotificationLanguage(language);
+        if (agents.length > 0) input.agents = agents.map(parseAgentId);
+        if (memoryLinks.length > 0) input.memoryLinks = memoryLinks.map(parseMemoryLink);
         const result = await setupProject(input);
+        if (optionValues(parsed, "format")[0] === "json") {
+          io.writeStdout(JSON.stringify(
+            result.created
+              ? {
+                  status: "created",
+                  language: result.language,
+                  server: result.server,
+                  topic: result.topic,
+                  integrations: result.integrations,
+                }
+              : {
+                  status: "existing",
+                  language: result.language,
+                  server: result.server,
+                  integrations: result.integrations,
+                },
+          ));
+        } else {
+          io.writeStdout(
+            result.created
+              ? `Noutify installed. Subscribe your phone to topic: ${result.topic}`
+              : "Noutify is already configured; selected agent integrations are ready.",
+          );
+          io.writeStdout("Run `noutify test` after subscribing your phone.");
+        }
+        return 0;
+      }
+      case "language": {
+        const value = parsed.operands[0];
+        if (value === undefined) {
+          throw new Error("language requires exactly one language");
+        }
+        const language = await setProjectLanguage(projectRoot, value);
         io.writeStdout(
-          result.created
-            ? `Noutify installed. Subscribe your phone to topic: ${result.topic}`
-            : "Noutify is already configured; the Stop hook is ready.",
+          language === "es"
+            ? "Idioma de notificaciones actualizado a español."
+            : "Notification language updated to English.",
         );
-        io.writeStdout("Run `noutify test` after subscribing your phone.");
         return 0;
       }
       case "test": {
@@ -201,10 +465,19 @@ export async function runCli(
         await confirmProject(projectRoot);
         io.writeStdout("Phone receipt confirmed. Noutify setup is active.");
         return 0;
+      case "confirm-agent": {
+        const agent = parsed.operands[0];
+        if (agent === undefined) {
+          throw new Error("confirm-agent requires exactly one agent");
+        }
+        await confirmAgent(projectRoot, agent, runtime);
+        io.writeStdout(`Automatic receipt confirmed for ${parseAgentId(agent)}.`);
+        return 0;
+      }
       case "doctor": {
         const result = await doctorProject(projectRoot, runtime);
         for (const check of result.checks) {
-          io.writeStdout(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.message}`);
+          io.writeStdout(`${check.status.toUpperCase()} ${check.name}: ${check.message}`);
         }
         return result.ok ? 0 : 1;
       }
@@ -212,8 +485,8 @@ export async function runCli(
         const result = await uninstallProject(projectRoot, runtime);
         io.writeStdout(
           result.changed
-            ? "Noutify hook removed; configuration was preserved."
-            : "No matching Noutify hook was installed; configuration was preserved.",
+            ? "Noutify integration removed; configuration was preserved."
+            : "No matching Noutify integration was installed; configuration was preserved.",
         );
         return 0;
       }
@@ -221,16 +494,37 @@ export async function runCli(
         if (parsed.subcommand === "claude-stop") {
           return runClaudeStopHook(projectRoot, io, runtime.send);
         }
+        if (parsed.subcommand === "codex-stop") {
+          return runCodexStopHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "gemini-after-agent") {
+          return runGeminiAfterAgentHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "copilot-agent-stop") {
+          return runCopilotAgentStopHook(projectRoot, io, runtime.send);
+        }
+        if (parsed.subcommand === "windsurf-post-response") {
+          return runWindsurfPostResponseHook(projectRoot, io, runtime.send);
+        }
+        return 0;
+      case "notify":
+        if (parsed.subcommand === "waiting") {
+          return runGenericWaitingNotification(
+            projectRoot,
+            optionValues(parsed, "agent")[0],
+            runtime.send,
+          );
+        }
         return 0;
       default:
         io.writeStderr(`Unknown command: ${parsed.command}`);
         return 1;
     }
   } catch (error) {
-    if (parsed.command !== "hook") {
+    if (parsed.command !== "hook" && parsed.command !== "notify") {
       io.writeStderr(error instanceof Error ? error.message : "Noutify command failed");
     }
-    return parsed.command === "hook" ? 0 : 1;
+    return parsed.command === "hook" || parsed.command === "notify" ? 0 : 1;
   }
 }
 

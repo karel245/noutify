@@ -1,47 +1,22 @@
-import { createWaitingNotification } from "../../core/waiting-notification.js";
-import type { Notification } from "../../core/types.js";
+import type { WaitingHookPayload } from "../waiting-hook.js";
 
-export interface ClaudeStopPayload {
-  stopHookActive: boolean;
-}
-
-export interface ClaudeStopContext {
-  projectName: string;
-  send: (notification: Notification) => Promise<unknown>;
-}
-
-export function parseClaudeStopPayload(input: string): ClaudeStopPayload {
+export function parseClaudeStopPayload(input: string): WaitingHookPayload {
   if (!input.trim()) {
-    return { stopHookActive: false };
+    return { recursive: false, valid: false };
   }
 
   try {
     const parsed: unknown = JSON.parse(input);
-    if (typeof parsed === "object" && parsed !== null) {
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       return {
-        stopHookActive:
+        recursive:
           "stop_hook_active" in parsed && parsed.stop_hook_active === true,
+        valid: true,
       };
     }
   } catch {
-    // Malformed hook input still represents a turn that returned to the user.
+    // Invalid hook input must not create a waiting notification.
   }
 
-  return { stopHookActive: false };
-}
-
-export async function handleClaudeStop(
-  input: string,
-  context: ClaudeStopContext,
-): Promise<void> {
-  try {
-    const payload = parseClaudeStopPayload(input);
-    if (payload.stopHookActive) {
-      return;
-    }
-
-    await context.send(createWaitingNotification(context.projectName));
-  } catch {
-    // Notification delivery is best-effort and never alters Claude's Stop flow.
-  }
+  return { recursive: false, valid: false };
 }

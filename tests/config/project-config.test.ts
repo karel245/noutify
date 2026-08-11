@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createInitialConfig,
+  ensureIgnoreRules,
   ensurePrivateIgnore,
   readProjectConfig,
+  validateProjectConfig,
   writeProjectConfig,
 } from "../../src/config/project-config.js";
 
@@ -34,6 +36,7 @@ describe("project configuration", () => {
       projectName: "Demo",
       server: "https://ntfy.example",
       topic: "private_topic_1234567890",
+      language: "es",
     });
 
     await writeProjectConfig(root, bundle);
@@ -49,15 +52,149 @@ describe("project configuration", () => {
 
     expect(publicText).not.toContain("private_topic_1234567890");
     expect(JSON.parse(publicText)).toEqual({
-      version: 1,
+      version: 2,
       project: { name: "Demo" },
       provider: { type: "ntfy" },
       events: { waiting: true },
+      integrations: [{ agent: "claude-code", mode: "native" }],
     });
     expect(JSON.parse(privateText)).toEqual({
       server: "https://ntfy.example",
       topic: "private_topic_1234567890",
+      language: "es",
       setupCompleted: false,
+      automaticReceipts: {},
+    });
+  });
+
+  it("normalizes a valid v1 pair to v2 without changing private values", () => {
+    const v1Public = {
+      version: 1,
+      project: { name: " Demo " },
+      provider: { type: "ntfy" },
+      events: { waiting: true },
+    };
+    const v1Private = {
+      server: "https://ntfy.example/",
+      topic: "private_topic_1234567890",
+      language: "es",
+      setupCompleted: false,
+    };
+
+    expect(validateProjectConfig(v1Public, v1Private)).toMatchObject({
+      public: {
+        version: 2,
+        project: v1Public.project,
+        provider: v1Public.provider,
+        events: v1Public.events,
+        integrations: [{ agent: "claude-code", mode: "native" }],
+      },
+      private: { ...v1Private, automaticReceipts: {} },
+    });
+  });
+
+  it("does not rewrite v1 files while reading their normalized values", async () => {
+    const root = await temporaryProject();
+    const publicText = `${JSON.stringify({
+      version: 1,
+      project: { name: "Demo" },
+      provider: { type: "ntfy" },
+      events: { waiting: true },
+    })}\n`;
+    const privateText = `${JSON.stringify({
+      server: "https://ntfy.example",
+      topic: "private_topic_1234567890",
+      language: "es",
+      setupCompleted: false,
+    })}\n`;
+    const publicPath = join(root, "noutify.config.json");
+    const privatePath = join(root, ".noutify.local.json");
+
+    await writeFile(publicPath, publicText, "utf8");
+    await writeFile(privatePath, privateText, "utf8");
+
+    await expect(readProjectConfig(root)).resolves.toMatchObject({
+      public: { version: 2 },
+      private: { automaticReceipts: {} },
+    });
+    await expect(readFile(publicPath, "utf8")).resolves.toBe(publicText);
+    await expect(readFile(privatePath, "utf8")).resolves.toBe(privateText);
+  });
+
+  it("rejects automatic receipt entries with invalid agent identifiers", () => {
+    expect(() =>
+      validateProjectConfig(
+        {
+          version: 2,
+          project: { name: "Demo" },
+          provider: { type: "ntfy" },
+          events: { waiting: true },
+          integrations: [{ agent: "claude-code", mode: "native" }],
+        },
+        {
+          server: "https://ntfy.example",
+          topic: "private_topic_1234567890",
+          language: "es",
+          setupCompleted: false,
+          automaticReceipts: { "generic:Cursor Settings": true },
+        },
+      ),
+    ).toThrow("invalid agent identifier");
+  });
+
+  it("rejects automatic receipt entries that are not true", () => {
+    expect(() =>
+      validateProjectConfig(
+        {
+          version: 2,
+          project: { name: "Demo" },
+          provider: { type: "ntfy" },
+          events: { waiting: true },
+          integrations: [{ agent: "claude-code", mode: "native" }],
+        },
+        {
+          server: "https://ntfy.example",
+          topic: "private_topic_1234567890",
+          language: "es",
+          setupCompleted: false,
+          automaticReceipts: { codex: false },
+        },
+      ),
+    ).toThrow("private config automaticReceipts values must be true");
+  });
+
+  it("uses a friendly topic when none is supplied", () => {
+    const bundle = createInitialConfig({ projectName: "Demo" });
+
+    expect(bundle.private.topic).toMatch(
+      /^Noutify-[23456789abcdefghjkmnpqrstuvwxyz]{12}$/,
+    );
+  });
+
+  it("reads legacy private configs without language as English", async () => {
+    const root = await temporaryProject();
+    await writeFile(
+      join(root, "noutify.config.json"),
+      `${JSON.stringify({
+        version: 1,
+        project: { name: "Demo" },
+        provider: { type: "ntfy" },
+        events: { waiting: true },
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(root, ".noutify.local.json"),
+      `${JSON.stringify({
+        server: "https://ntfy.sh",
+        topic: "private_topic_1234567890",
+        setupCompleted: false,
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(readProjectConfig(root)).resolves.toMatchObject({
+      private: { language: "en" },
     });
   });
 
@@ -72,6 +209,25 @@ describe("project configuration", () => {
       .split(/\r?\n/)
       .filter((line) => line === ".noutify.local.json");
     expect(lines).toEqual([".noutify.local.json"]);
+  });
+
+  it("appends missing exact ignore rules once without changing existing bytes", async () => {
+    const root = await temporaryProject();
+    const ignorePath = join(root, ".gitignore");
+    await writeFile(ignorePath, "dist/\r\n.noutify.local.json\r\n", "utf8");
+
+    await ensureIgnoreRules(root, [
+      ".noutify.local.json",
+      "/.github/copilot/settings.local.json",
+      "/.github/copilot/settings.local.json",
+    ]);
+
+    const expected =
+      "dist/\r\n.noutify.local.json\r\n/.github/copilot/settings.local.json\n";
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe(expected);
+
+    await ensureIgnoreRules(root, ["/.github/copilot/settings.local.json"]);
+    await expect(readFile(ignorePath, "utf8")).resolves.toBe(expected);
   });
 
   it("rejects a short or unsafe topic before writing files", async () => {
@@ -99,7 +255,7 @@ describe("project configuration", () => {
     await writeFile(join(root, ".noutify.local.json"), "{}\n", "utf8");
 
     await expect(readProjectConfig(root)).rejects.toThrow(
-      "public config version must be 1",
+      "public config version must be 1 or 2",
     );
   });
 
