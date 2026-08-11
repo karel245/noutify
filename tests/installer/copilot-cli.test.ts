@@ -175,6 +175,94 @@ describe("GitHub Copilot CLI adapter", () => {
     ).resolves.toMatchObject({ installed: true });
   });
 
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ] as const)(
+    "keeps one leading BOM when creating the hook path in an empty %s root",
+    async (_label, lineEnding) => {
+      const root = await temporaryProject();
+      const runtime = { nodePath: "C:/node.exe", cliPath: "C:/noutify/cli.js" };
+      const command = buildCopilotAgentStopHookCommand(root, runtime);
+      const ownedText = JSON.stringify({
+        type: "command",
+        powershell: command,
+        timeoutSec: 10,
+      });
+      const path = settingsPath(root);
+      const contents = `\uFEFF{${lineEnding}}${lineEnding}`;
+      const expected =
+        `\uFEFF{${lineEnding}` +
+        `  "hooks": {"agentStop": [${ownedText}]}${lineEnding}` +
+        `}${lineEnding}`;
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, contents, "utf8");
+      await writeFile(
+        join(root, ".gitignore"),
+        "/.github/copilot/settings.local.json\n",
+        "utf8",
+      );
+
+      await expect(
+        copilotCliAdapter.install({ projectRoot: root, runtime }),
+      ).resolves.toEqual({ changed: true });
+      const installed = await readFile(path, "utf8");
+      expect(installed).toBe(expected);
+      expect(installed.indexOf("\uFEFF")).toBe(0);
+      expect(installed.indexOf("\uFEFF", 1)).toBe(-1);
+      await expect(
+        copilotCliAdapter.inspect({ projectRoot: root, runtime }),
+      ).resolves.toMatchObject({ installed: true });
+    },
+  );
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ] as const)(
+    "keeps one leading BOM when adding agentStop to an empty nested %s object",
+    async (_label, lineEnding) => {
+      const root = await temporaryProject();
+      const runtime = { nodePath: "C:/node.exe", cliPath: "C:/noutify/cli.js" };
+      const command = buildCopilotAgentStopHookCommand(root, runtime);
+      const ownedText = JSON.stringify({
+        type: "command",
+        powershell: command,
+        timeoutSec: 10,
+      });
+      const path = settingsPath(root);
+      const contents =
+        `\uFEFF{${lineEnding}` +
+        `  "hooks": {${lineEnding}` +
+        `  }${lineEnding}` +
+        `}${lineEnding}`;
+      const expected =
+        `\uFEFF{${lineEnding}` +
+        `  "hooks": {${lineEnding}` +
+        `    "agentStop": [${ownedText}]${lineEnding}` +
+        `  }${lineEnding}` +
+        `}${lineEnding}`;
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, contents, "utf8");
+      await writeFile(
+        join(root, ".gitignore"),
+        "/.github/copilot/settings.local.json\n",
+        "utf8",
+      );
+
+      await expect(
+        copilotCliAdapter.install({ projectRoot: root, runtime }),
+      ).resolves.toEqual({ changed: true });
+      const installed = await readFile(path, "utf8");
+      expect(installed).toBe(expected);
+      expect(installed.indexOf("\uFEFF")).toBe(0);
+      expect(installed.indexOf("\uFEFF", 1)).toBe(-1);
+      await expect(
+        copilotCliAdapter.inspect({ projectRoot: root, runtime }),
+      ).resolves.toMatchObject({ installed: true });
+    },
+  );
+
   it("keeps an exact commented JSONC installation byte-for-byte", async () => {
     const root = await temporaryProject();
     const runtime = { nodePath: "C:/node.exe", cliPath: "C:/noutify/cli.js" };

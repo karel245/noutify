@@ -483,7 +483,7 @@ function newlineFor(source: string): "\r\n" | "\n" {
 function indentationUnit(source: string): string {
   const indents = new Set<string>([""]);
   for (const line of source.split(/\r?\n/)) {
-    const match = /^(\s*)\S/.exec(line);
+    const match = /^([\t ]*)[^\t ]/.exec(line);
     if (match !== null) indents.add(match[1] ?? "");
   }
   let unit: string | undefined;
